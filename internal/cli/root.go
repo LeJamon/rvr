@@ -46,6 +46,7 @@ sessions whose repository is under that path and launches new ones there.`,
 		newAttachCmd(),
 		newResumeCmd(),
 		newKillCmd(),
+		newLogsCmd(),
 		newConfigCmd(),
 		newSuperviseCmd(),
 	)
