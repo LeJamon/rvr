@@ -145,10 +145,12 @@ func TestSupervisorAttachAndKill(t *testing.T) {
 	}
 }
 
-// TestAttachFullScreenClearsInsteadOfReplaying verifies that attaching to a
-// harness that entered the alternate screen buffer sends a clear rather than
-// replaying its historical (cursor-addressed) output, which would garble.
-func TestAttachFullScreenClearsInsteadOfReplaying(t *testing.T) {
+// TestAttachFullScreenReplaysSnapshot verifies that attaching to a harness
+// that entered the alternate screen buffer receives a rendered snapshot of the
+// current screen (containing its content), not a raw replay of historical
+// output. Diff-rendering TUIs never repaint unchanged cells, so the snapshot
+// is the only way an attaching client sees the full frame.
+func TestAttachFullScreenReplaysSnapshot(t *testing.T) {
 	paths := testPaths(t)
 	st, err := store.Open(paths.DBFile)
 	if err != nil {
@@ -194,10 +196,15 @@ func TestAttachFullScreenClearsInsteadOfReplaying(t *testing.T) {
 	}
 
 	if !bytes.Contains(got, []byte("\x1b[2J")) {
-		t.Errorf("attach did not send a clear-screen; got %q", got)
+		t.Errorf("snapshot did not start with a clear-screen; got %.200q", got)
 	}
-	if bytes.Contains(got, []byte("HISTORICALFRAME")) {
-		t.Errorf("attach replayed stale full-screen output; got %q", got)
+	// The snapshot must carry the frame content (rendered from the emulator)...
+	if !bytes.Contains(got, []byte("HISTORICALFRAME")) {
+		t.Errorf("snapshot missing the screen content; got %.200q", got)
+	}
+	// ...but must not be a raw replay of the app's boot output.
+	if bytes.Contains(got, []byte("\x1b[?1049h")) {
+		t.Errorf("attach replayed raw output instead of a snapshot; got %.200q", got)
 	}
 
 	wire.WriteJSON(conn, wire.TypeKill, struct{}{})

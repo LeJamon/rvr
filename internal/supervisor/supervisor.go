@@ -129,7 +129,7 @@ func (s *Supervisor) run() (int, error) {
 	}
 
 	s.ring = ringbuf.New(ringSize)
-	s.hub = newHub(s.ring, wire.Info{
+	s.hub = newHub(s.ring, newScreen(int(s.curCols), int(s.curRows)), wire.Info{
 		SessionID: sess.ID,
 		Title:     sess.Title,
 		Harness:   sess.Harness,
@@ -185,18 +185,25 @@ func (s *Supervisor) startPTY(spec adapter.LaunchSpec) error {
 	return nil
 }
 
-// pumpOutput copies PTY output into the ring/raw log and broadcasts it live,
-// tracking whether the harness is in the alternate-screen buffer.
+// pumpOutput copies PTY output into the screen emulator, ring, and raw log,
+// and broadcasts it live. Chunks are normalized to sequence-safe boundaries
+// first (splitSafe) so a client attaching between chunks never starts
+// mid-escape-sequence, and the alt-screen tracker sees whole sequences.
 func (s *Supervisor) pumpOutput() {
 	buf := make([]byte, 32*1024)
+	var carry []byte
 	for {
 		n, err := s.ptmx.Read(buf)
 		if n > 0 {
-			chunk := buf[:n]
-			s.answerTerminalQueries(chunk)
-			s.altScreen.Store(updateAltScreen(s.altScreen.Load(), chunk))
-			s.rawLog.Write(chunk)
-			s.hub.broadcastOutput(chunk)
+			data := append(carry, buf[:n]...)
+			emit, rest := splitSafe(data)
+			carry = append([]byte(nil), rest...)
+			if len(emit) > 0 {
+				s.answerTerminalQueries(emit)
+				s.altScreen.Store(updateAltScreen(s.altScreen.Load(), emit))
+				s.rawLog.Write(emit)
+				s.hub.broadcastOutput(emit)
+			}
 		}
 		if err != nil {
 			return // PTY closed: harness exited
@@ -258,6 +265,21 @@ func (s *Supervisor) acceptClients() {
 
 func (s *Supervisor) serveClient(cl *client) {
 	go cl.writeLoop()
+
+	// The attach client sends its terminal size immediately on connect. Apply
+	// it BEFORE registering so the screen snapshot is rendered at the client's
+	// size — a snapshot at the wrong width wraps every row and scrolls the
+	// content away. Non-interactive clients that send nothing just hit the
+	// short deadline and get the current-size snapshot.
+	cl.conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if f, err := wire.Read(cl.conn); err == nil {
+		if !s.handleClientFrame(f) {
+			cl.close()
+			return
+		}
+	}
+	cl.conn.SetReadDeadline(time.Time{})
+
 	s.hub.register(cl, s.altScreen.Load())
 	defer s.hub.remove(cl)
 
@@ -266,31 +288,41 @@ func (s *Supervisor) serveClient(cl *client) {
 		if err != nil {
 			return
 		}
-		switch f.Type {
-		case wire.TypeInput:
-			s.ptmx.Write(f.Payload)
-		case wire.TypeResize:
-			var r wire.Resize
-			if f.DecodeJSON(&r) == nil {
-				s.resize(r.Rows, r.Cols)
-			}
-		case wire.TypeKill:
-			s.requestKill()
-		case wire.TypeDetach:
+		if !s.handleClientFrame(f) {
 			return
 		}
 	}
 }
 
-// resize applies the client's terminal size. When the size is unchanged it
-// nudges the rows to force a SIGWINCH so the harness TUI repaints on attach
-// (the dtach trick, SPEC.md §4).
+// handleClientFrame applies one client frame; false means the client detached.
+func (s *Supervisor) handleClientFrame(f wire.Frame) bool {
+	switch f.Type {
+	case wire.TypeInput:
+		s.ptmx.Write(f.Payload)
+	case wire.TypeResize:
+		var r wire.Resize
+		if f.DecodeJSON(&r) == nil {
+			s.resize(r.Rows, r.Cols)
+		}
+	case wire.TypeKill:
+		s.requestKill()
+	case wire.TypeDetach:
+		return false
+	}
+	return true
+}
+
+// resize applies the client's terminal size to the emulator and the PTY. The
+// emulator resizes first so the app's post-SIGWINCH repaint is parsed against
+// the new grid. When the size is unchanged, the rows are nudged to force a
+// SIGWINCH so the harness TUI repaints on attach (the dtach trick, SPEC.md §4).
 func (s *Supervisor) resize(rows, cols uint16) {
 	if rows == 0 || cols == 0 {
 		return
 	}
 	s.sizeMu.Lock()
 	defer s.sizeMu.Unlock()
+	s.hub.resizeScreen(int(cols), int(rows))
 	if rows == s.curRows && cols == s.curCols {
 		_ = pty.Setsize(s.ptmx, &pty.Winsize{Rows: rows - 1, Cols: cols})
 	}

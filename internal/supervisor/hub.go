@@ -64,34 +64,47 @@ func (cl *client) writeLoop() {
 	}
 }
 
-// hub fans PTY output and state frames out to attached clients. The ring write
-// and every broadcast happen under mu so a newly registered client's snapshot
-// is consistent with the live stream (no gaps, no duplication).
+// hub fans PTY output and state frames out to attached clients. The screen
+// emulator, ring write, and every broadcast happen under mu so a newly
+// registered client's snapshot is consistent with the live stream (no gaps,
+// no duplication).
 type hub struct {
 	mu      sync.Mutex
 	clients map[*client]struct{}
 	ring    *ringbuf.Ring
+	screen  *screen
 	info    wire.Info
 	state   wire.State
 }
 
-func newHub(ring *ringbuf.Ring, info wire.Info) *hub {
+func newHub(ring *ringbuf.Ring, scr *screen, info wire.Info) *hub {
 	return &hub{
 		clients: make(map[*client]struct{}),
 		ring:    ring,
+		screen:  scr,
 		info:    info,
 		state:   wire.State{Status: info.Status, Detail: info.Detail},
 	}
 }
 
-// broadcastOutput records PTY bytes in the ring and forwards them live.
+// broadcastOutput feeds the screen emulator, records PTY bytes in the ring,
+// and forwards them live.
 func (h *hub) broadcastOutput(p []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	h.screen.write(p)
 	h.ring.Write(p)
 	for _, chunk := range chunkBytes(p, outputChunkSize) {
 		h.fanout(wire.Frame{Type: wire.TypeOutput, Payload: chunk})
 	}
+}
+
+// resizeScreen keeps the emulator's grid in sync with the PTY, serialized
+// against writes so snapshots stay coherent.
+func (h *hub) resizeScreen(cols, rows int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.screen.resize(cols, rows)
 }
 
 // broadcastState updates the latest state and forwards it.
@@ -113,28 +126,24 @@ func (h *hub) broadcastExit(e wire.Exit) {
 	}
 }
 
-// clearScreen homes the cursor and clears the display. Sent on attach to a
-// full-screen harness so it repaints cleanly (via the SIGWINCH that follows the
-// client's resize) rather than showing a replay of stale frames.
-var clearScreen = []byte("\x1b[2J\x1b[H")
-
 // register admits a client: greet, prime the screen, send current state, then
-// start receiving live frames. Held under mu so no output is missed.
+// start receiving live frames. Held under mu so no output is missed and the
+// primer exactly matches the point where the live stream resumes.
 //
-// For a line-based harness the scrollback ring is replayed. For a full-screen
-// TUI (altScreen) the ring holds interleaved cursor-addressed frames that
-// garble when replayed, so the client's screen is cleared instead and the
-// harness redraws on the next SIGWINCH.
+// For a line-based harness the scrollback ring is replayed (history matters).
+// For a full-screen TUI (altScreen) the ring holds interleaved cursor-addressed
+// diff frames that garble when replayed — and the app won't repaint unchanged
+// cells — so the client receives an exact snapshot of the emulator's screen.
 func (h *hub) register(cl *client, altScreen bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	cl.enqueue(jsonFrame(wire.TypeHello, h.info))
+	primer := h.ring.Snapshot()
 	if altScreen {
-		cl.enqueue(wire.Frame{Type: wire.TypeOutput, Payload: clearScreen})
-	} else {
-		for _, chunk := range chunkBytes(h.ring.Snapshot(), outputChunkSize) {
-			cl.enqueue(wire.Frame{Type: wire.TypeOutput, Payload: chunk})
-		}
+		primer = h.screen.snapshot()
+	}
+	for _, chunk := range chunkBytes(primer, outputChunkSize) {
+		cl.enqueue(wire.Frame{Type: wire.TypeOutput, Payload: chunk})
 	}
 	cl.enqueue(jsonFrame(wire.TypeState, h.state))
 	h.clients[cl] = struct{}{}

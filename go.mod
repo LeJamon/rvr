@@ -9,6 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
+	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.44.0
 	modernc.org/sqlite v1.53.0

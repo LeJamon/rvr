@@ -109,17 +109,27 @@ Unix socket server ──► attach / input / resize / subscribe / kill / info
 ```
 
 - **PTY**: `creack/pty`. Size follows the most recent attacher; on attach with an
-  unchanged size, jiggle rows by −1/+1 to force SIGWINCH so the harness TUI repaints
-  (the dtach trick). v1 does **not** embed a terminal emulator.
-- **Attach replay depends on screen mode.** The supervisor tracks whether the harness
-  is in the alternate-screen buffer (watching for `\x1b[?1049h`/`l` etc. in the
-  output). For a line-based harness, attach replays the scrollback ring. For a
-  full-screen TUI (opencode, pi), replaying the ring is wrong — it is a stream of
-  cursor-addressed frames that garble when re-emitted onto a fresh screen — so instead
-  the client's screen is cleared (`\x1b[2J\x1b[H`) and the harness redraws on the
-  SIGWINCH that follows the client's resize. This is the same principle as `dtach -r
-  winch`. A VT screen-snapshot (a real emulator) can be added later for pixel-perfect
-  reattach.
+  unchanged size, jiggle rows by −1/+1 to force SIGWINCH (harmless nudge for apps
+  that do repaint on it).
+- **Server-side terminal emulator (vt10x).** The supervisor feeds all harness output
+  through an embedded VT emulator that maintains the true screen state. Modern TUIs
+  (opencode's opentui) render *differentially* against their own internal frame
+  buffer and never repaint cells they believe are already on screen — so an attaching
+  client cannot rely on the app to redraw. Instead:
+  - **Full-screen harness (alt-screen tracked via `\x1b[?1049h`/`l`):** attach replays
+    an exact **snapshot** rendered from the emulator — reset+clear, every cell painted
+    with its colors/attributes (truecolor preserved), cursor restored. The client's
+    display then matches the app's internal buffer, and subsequent diffs apply
+    cleanly. This is the tmux model.
+  - **Line-based harness:** attach replays the scrollback ring (history matters more).
+  - The client's initial resize frame is applied **before** the snapshot is rendered,
+    so the snapshot matches the client's dimensions (a wrong-width snapshot wraps
+    every row and scrolls the content away).
+- **Sequence-safe chunking.** PTY reads can split an escape sequence or UTF-8 rune
+  across chunks; a client attaching between such chunks would start mid-sequence and
+  print the tail literally (";2;255;255;255m" garbage). The supervisor normalizes all
+  broadcast boundaries with a small VT parser (`splitSafe`): incomplete trailing
+  sequences are carried into the next chunk (bounded at 8 KiB for malformed output).
 - **Socket protocol**: newline-delimited JSON control frames + length-prefixed binary
   frames for PTY I/O. Messages: `hello`, `snapshot` (ring buffer replay), `output`,
   `input`, `resize`, `state`, `detach`, `kill`, `info`. Multiple simultaneous clients
@@ -392,6 +402,7 @@ in a session window.
 | CLI | `spf13/cobra` |
 | TUI | `charmbracelet/bubbletea` + `lipgloss` + `bubbles` |
 | PTY | `creack/pty` |
+| VT emulator | `hinshun/vt10x` (screen state for attach snapshots) |
 | SQLite | `modernc.org/sqlite` (pure Go, CGO-free) |
 | Config | `BurntSushi/toml` |
 | Logging | `log/slog` (JSON to supervisor log files) |
