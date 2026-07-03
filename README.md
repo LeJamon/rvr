@@ -53,11 +53,12 @@ the selected row is framed with accent-colored top/bottom rules.
   **and attach** — you land in the harness's own input with its native `/commands` and
   `@file` syntax (empty prompt = fresh harness). **Tab** opens the harness picker to
   choose which harness the next session uses. You can only type when it's selected.
-- **A session selected:** `→`/`Enter` open its window · `e` rename · `r` resume ·
-  `k` remove · `/` filter · `↓` back to the prompt box · `Ctrl+C` quit. (Rename is a
-  xanax-only label; it never touches the harness's own session.) A live peek of the
-  selected session's screen shows in a pane above the prompt, and each row shows its
-  live git branch (and open PR number, via `gh`) on the right.
+- **A session selected:** `→`/`Enter` open its window · `space` toggle a live peek ·
+  `e` rename · `r` resume · `k` remove · `/` filter · `↓` back to the prompt box ·
+  `Ctrl+C` quit. (Rename is a xanax-only label; it never touches the harness's own
+  session.) The peek shows the session's current screen in a pane above the prompt
+  and closes when the selection moves; each row shows its live git branch (and open
+  PR number, via `gh`) on the right.
 - **Session window:** opening a session drops you into the harness's own live TUI (the
   conversation). Press **Left arrow** (or `ctrl+\`) to detach — the session keeps
   running in the background; **Right arrow** from the list opens it. (Left/right are

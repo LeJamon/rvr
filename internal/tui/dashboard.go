@@ -74,7 +74,7 @@ type model struct {
 	gitCache     map[string]gitInfo // live branch/PR per repo path
 	gitPollCount int                // gates the slower PR refresh
 
-	previewID   string // session id the current preview belongs to
+	previewOn   bool   // preview panel open (space toggles it on the selected session)
 	previewText string // last fetched preview of the selected session
 
 	width, height int
@@ -275,6 +275,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessions = filterSessions(m.allSessions, m.filter)
 		var selCmd tea.Cmd
 		m, selCmd = m.reselect(prevID)
+		m = m.closeMovedPreview(prevID)
 		if firstLoad {
 			// Show branches promptly rather than waiting for the 5 s git tick
 			// (branches only — the slower gh PR lookup stays on the tick).
@@ -287,8 +288,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.reload(), tickCmd(), m.previewCmd())
 
 	case previewMsg:
-		if msg.id == m.selectedID() { // ignore stale results after moving
-			m.previewID, m.previewText = msg.id, msg.text
+		if m.previewOn && msg.id == m.selectedID() { // ignore stale results after moving or closing
+			m.previewText = msg.text
 		}
 		return m, nil
 
@@ -344,6 +345,21 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	// Any other key disarms a pending quit confirmation.
 	m.confirmQuit = false
+	// The peek is per-session and closes whenever a key moves the selection to a
+	// different session (reopened with space). updateKey is the single choke point
+	// for all key handling, so capturing the selected id here and re-checking it
+	// after dispatch closes the peek for every key-driven selection change in one
+	// place — no individual key handler has to remember to route through it.
+	prev := m.selectedID()
+	next, cmd := m.dispatchKey(msg)
+	if nm, ok := next.(model); ok {
+		next = nm.closeMovedPreview(prev)
+	}
+	return next, cmd
+}
+
+// dispatchKey routes a key to the handler for the current mode.
+func (m model) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.renaming {
 		return m.updateRenameKey(msg)
 	}
@@ -370,7 +386,6 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // moveUp/moveDown treat the prompt box as the row just below the last session.
 func (m model) moveUp() (tea.Model, tea.Cmd) {
-	prev := m.selectedID()
 	if m.onComposer {
 		if len(m.sessions) > 0 {
 			m.onComposer = false
@@ -380,11 +395,10 @@ func (m model) moveUp() (tea.Model, tea.Cmd) {
 	} else if m.cursor > 0 {
 		m.cursor--
 	}
-	return m.afterMove(prev, nil)
+	return m, nil
 }
 
 func (m model) moveDown() (tea.Model, tea.Cmd) {
-	prev := m.selectedID()
 	if m.onComposer {
 		return m, nil // already the bottom row
 	}
@@ -395,17 +409,21 @@ func (m model) moveDown() (tea.Model, tea.Cmd) {
 		m.onComposer = true
 		extra = m.composer.Focus()
 	}
-	return m.afterMove(prev, extra)
+	return m, extra
 }
 
-// afterMove clears the stale preview and requests a fresh one when the selected
-// session changed, batching any extra command.
-func (m model) afterMove(prevID string, extra tea.Cmd) (tea.Model, tea.Cmd) {
-	if m.selectedID() == prevID {
-		return m, extra
+// closeMovedPreview closes the preview when the selection left prevID — the peek
+// is per-session, reopened with space. Callers capture the selected id before a
+// change and pass it here afterwards: the updateKey choke point covers every
+// key-driven selection change, and the async sessionsMsg reload (which can drop
+// the peeked session) calls it directly. This keeps the preview from silently
+// jumping to a session the user did not peek.
+func (m model) closeMovedPreview(prevID string) model {
+	if m.selectedID() != prevID {
+		m.previewOn = false
+		m.previewText = ""
 	}
-	m.previewText, m.previewID = "", ""
-	return m, tea.Batch(extra, m.previewCmd())
+	return m
 }
 
 // updateComposerKey runs while the prompt box is selected. Enter launches a
@@ -514,6 +532,8 @@ func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.execInteractive("resume", s.ID)
 	}
 	switch msg.String() {
+	case " ":
+		return m.togglePreview()
 	case "o":
 		return m, m.openSession(s)
 	case "k":
@@ -742,9 +762,23 @@ func indexOfID(sessions []*session.Session, id string) int {
 	return -1
 }
 
+// togglePreview opens or closes the peek of the selected session's screen.
+// Opening fetches immediately; while open, the 1 s tick keeps it fresh.
+func (m model) togglePreview() (tea.Model, tea.Cmd) {
+	m.previewOn = !m.previewOn
+	m.previewText = ""
+	if !m.previewOn {
+		return m, nil
+	}
+	return m, m.previewCmd()
+}
+
 // previewCmd fetches a peek of the selected session's screen (nothing while
-// the prompt box is selected). Runs off the main loop.
+// the preview is closed or the prompt box is selected). Runs off the main loop.
 func (m model) previewCmd() tea.Cmd {
+	if !m.previewOn {
+		return nil
+	}
 	s := m.current()
 	if s == nil {
 		return nil
