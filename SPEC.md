@@ -310,7 +310,7 @@ notifications     = true         # desktop notifications on needs-input/complete
 interact_exit_key = "ctrl+\\"    # step out of raw passthrough back to navigate mode (§10);
                                  # arrows/Escape are reserved by the harness TUIs
 
-# TUI colors — ANSI palette index ("0"–"255") or hex ("#rrggbb"); omitted
+# TUI colors — ANSI palette index ("0"–"255") or hex ("#rgb"/"#rrggbb"); omitted
 # fields keep their defaults. Full set: accent, waiting, running, completed,
 # failed, cancelled, muted, text, branch, pr.
 [theme]
