@@ -93,6 +93,8 @@ type actionDoneMsg struct{ status string }
 
 // Run starts the dashboard event loop.
 func Run(deps Deps) error {
+	applyTheme(deps.Cfg.Theme) // rebuild styles from the configured theme
+
 	ta := textarea.New()
 	ta.Placeholder = "Paste a prompt and press Enter to launch a new session…"
 	ta.ShowLineNumbers = false

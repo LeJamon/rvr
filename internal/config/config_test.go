@@ -87,6 +87,38 @@ resume_args = ["session", "--resume"]
 	}
 }
 
+func TestThemeMergeOverridesOnlyProvidedFields(t *testing.T) {
+	path := writeConfig(t, `
+[theme]
+accent = "#ff8800"
+branch = "5"
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Theme.Accent != "#ff8800" {
+		t.Errorf("accent = %q, want overridden hex", cfg.Theme.Accent)
+	}
+	if cfg.Theme.Branch != "5" {
+		t.Errorf("branch = %q, want overridden", cfg.Theme.Branch)
+	}
+	// Unspecified fields keep the defaults.
+	def := config.DefaultTheme()
+	if cfg.Theme.Waiting != def.Waiting || cfg.Theme.Failed != def.Failed {
+		t.Errorf("unspecified theme fields were not defaulted: %+v", cfg.Theme)
+	}
+}
+
+func TestDefaultThemeFullyPopulated(t *testing.T) {
+	th := config.DefaultTheme()
+	if th.Accent == "" || th.Muted == "" || th.Text == "" || th.PR == "" ||
+		th.Waiting == "" || th.Running == "" || th.Completed == "" ||
+		th.Failed == "" || th.Cancelled == "" || th.Branch == "" {
+		t.Errorf("DefaultTheme has empty fields: %+v", th)
+	}
+}
+
 func TestLoadDefaultsCommandToHarnessName(t *testing.T) {
 	path := writeConfig(t, "[harness.mytool]\nadapter = \"generic\"\n")
 	cfg, err := config.Load(path)

@@ -3,30 +3,49 @@ package tui
 import (
 	"github.com/charmbracelet/lipgloss"
 
+	"xanax/internal/config"
 	"xanax/internal/session"
 )
 
+// Colors and styles are package-level and rebuilt from the configured theme by
+// applyTheme at startup (the TUI is single-instance, so mutating globals once
+// before the program runs is safe). init seeds them with the defaults so tests
+// that never call Run still have valid styles.
 var (
-	colWaiting   = lipgloss.Color("11") // yellow: needs input
-	colRunning   = lipgloss.Color("12") // blue: working
-	colCompleted = lipgloss.Color("10") // green
-	colFailed    = lipgloss.Color("9")  // red
-	colCancelled = lipgloss.Color("8")  // grey
-	colMuted     = lipgloss.Color("244")
-	colAccent    = lipgloss.Color("13")
-	colWhite     = lipgloss.Color("15")
+	colWaiting, colRunning, colCompleted, colFailed, colCancelled lipgloss.Color
+	colMuted, colAccent, colWhite, colBranch, colPR               lipgloss.Color
 
-	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
-	groupStyle  = lipgloss.NewStyle().Bold(true)
-	mutedStyle  = lipgloss.NewStyle().Foreground(colMuted)
+	titleStyle, groupStyle, mutedStyle, selectStyle, cursorStyle lipgloss.Style
+	footerStyle, errStyle, fieldStyle, branchStyle, prStyle      lipgloss.Style
+)
+
+func init() { applyTheme(config.DefaultTheme()) }
+
+// applyTheme rebuilds every color and derived style from t. t is expected to
+// have all fields populated (config merges defaults), so each is used directly.
+func applyTheme(t config.Theme) {
+	colWaiting = lipgloss.Color(t.Waiting)
+	colRunning = lipgloss.Color(t.Running)
+	colCompleted = lipgloss.Color(t.Completed)
+	colFailed = lipgloss.Color(t.Failed)
+	colCancelled = lipgloss.Color(t.Cancelled)
+	colMuted = lipgloss.Color(t.Muted)
+	colAccent = lipgloss.Color(t.Accent)
+	colWhite = lipgloss.Color(t.Text)
+	colBranch = lipgloss.Color(t.Branch)
+	colPR = lipgloss.Color(t.PR)
+
+	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
+	groupStyle = lipgloss.NewStyle().Bold(true)
+	mutedStyle = lipgloss.NewStyle().Foreground(colMuted)
 	selectStyle = lipgloss.NewStyle().Bold(true)
 	cursorStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 	footerStyle = lipgloss.NewStyle().Foreground(colMuted)
-	errStyle    = lipgloss.NewStyle().Foreground(colFailed).Bold(true)
-	fieldStyle  = lipgloss.NewStyle().Foreground(colMuted)
-	branchStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6")) // cyan
-	prStyle     = lipgloss.NewStyle().Foreground(colCompleted)        // green
-)
+	errStyle = lipgloss.NewStyle().Foreground(colFailed).Bold(true)
+	fieldStyle = lipgloss.NewStyle().Foreground(colMuted)
+	branchStyle = lipgloss.NewStyle().Foreground(colBranch)
+	prStyle = lipgloss.NewStyle().Foreground(colPR)
+}
 
 // hRules wraps content with full-width top and bottom horizontal rules only
 // (no left/right border), colored as given. Used to mark the selected session

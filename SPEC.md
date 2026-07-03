@@ -306,8 +306,17 @@ CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 # ~/.config/xanax/config.toml
 default_harness   = "opencode"
 auto_resume       = true         # revive interrupted sessions on launch (§6)
+notifications     = true         # desktop notifications on needs-input/completed/failed
 interact_exit_key = "ctrl+\\"    # step out of raw passthrough back to navigate mode (§10);
                                  # arrows/Escape are reserved by the harness TUIs
+
+# TUI colors — ANSI palette index ("0"–"255") or hex ("#rrggbb"); omitted
+# fields keep their defaults. Full set: accent, waiting, running, completed,
+# failed, cancelled, muted, text, branch, pr.
+[theme]
+accent = "13"
+muted  = "244"
+branch = "6"
 
 [harness.opencode]
 adapter = "opencode"             # native adapter
