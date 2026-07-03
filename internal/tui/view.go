@@ -54,10 +54,10 @@ func (m model) inputBlock() string {
 	}
 }
 
-// renderPreview shows a peek of the selected session's screen when one is
-// selected and a preview has been fetched.
+// renderPreview shows a peek of the selected session's screen once space has
+// opened the preview and a snapshot has been fetched.
 func (m model) renderPreview() string {
-	if m.onComposer || m.previewText == "" || m.previewID != m.selectedID() {
+	if !m.previewOn || m.onComposer || m.previewText == "" || m.previewID != m.selectedID() {
 		return ""
 	}
 	label := mutedStyle.Render("Preview  ·  " + m.previewID[:min(8, len(m.previewID))])
@@ -298,7 +298,7 @@ func (m model) footer() string {
 	case m.onComposer:
 		hint = "enter launch · ^o launch+attach · tab harness (+ add) · ↑ sessions · ^c quit"
 	default:
-		hint = "↑/↓ select · →/enter open · e rename · r resume · k remove · / filter · ^c quit"
+		hint = "↑/↓ select · →/enter open · space preview · e rename · r resume · k remove · / filter · ^c quit"
 	}
 	out := footerStyle.Render(hint)
 	if m.status != "" {

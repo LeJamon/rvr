@@ -58,6 +58,8 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlK}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
+	case "space": // bubbletea encodes the spacebar as KeySpace carrying the rune
+		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -625,5 +627,160 @@ func TestEmptyStateRenders(t *testing.T) {
 	m := newTestModel(nil)
 	if out := m.View(); !strings.Contains(out, "No sessions") {
 		t.Errorf("empty state not shown: %q", out)
+	}
+}
+
+func TestPreviewOpensOnlyWithSpace(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	if m.renderPreview() != "" {
+		t.Fatal("preview rendered before space was pressed")
+	}
+	if m.previewCmd() != nil {
+		t.Fatal("preview fetch scheduled while the preview is closed")
+	}
+
+	next, cmd := m.Update(key("space"))
+	m = next.(model)
+	if !m.previewOn || cmd == nil {
+		t.Fatalf("space should open the preview and fetch: on=%v cmd-nil=%v", m.previewOn, cmd == nil)
+	}
+	if m.previewCmd() == nil {
+		t.Fatal("open preview must keep scheduling fetches (tick refresh)")
+	}
+	next, _ = m.Update(previewMsg{id: m.selectedID(), text: "agent screen"})
+	m = next.(model)
+	if !strings.Contains(m.renderPreview(), "agent screen") {
+		t.Errorf("preview not rendered after space + fetch: %q", m.renderPreview())
+	}
+
+	m = send(m, "space")
+	if m.previewOn || m.renderPreview() != "" {
+		t.Error("space again should close the preview")
+	}
+}
+
+func TestPreviewClosesWhenSelectionMoves(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m = send(m, "space")
+	next, _ := m.Update(previewMsg{id: m.selectedID(), text: "peek"})
+	m = next.(model)
+	m = send(m, "down")
+	if m.previewOn || m.renderPreview() != "" {
+		t.Error("moving the selection should close the preview")
+	}
+}
+
+// TestPreviewClosesWhenPeekedSessionVanishes guards the non-arrow selection
+// change: a reload drops the peeked session and reselect() clamps onto a
+// neighbor — the preview must close rather than silently show a session the
+// user never peeked.
+func TestPreviewClosesWhenPeekedSessionVanishes(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m = send(m, "space")
+	next, _ := m.Update(previewMsg{id: m.selectedID(), text: "peek"})
+	m = next.(model)
+
+	all := sampleSessions()
+	remaining := grouped([]*session.Session{all[0], all[2]}) // peeked wait0001 removed
+	next, _ = m.Update(sessionsMsg{sessions: remaining})
+	m = next.(model)
+	if m.previewOn || m.renderPreview() != "" {
+		t.Error("preview should close when the peeked session disappears on reload")
+	}
+}
+
+func TestPreviewStaleResultIgnoredWhenClosed(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m = send(m, "space")
+	id := m.selectedID()
+	m = send(m, "space") // closed again before the in-flight fetch lands
+	next, _ := m.Update(previewMsg{id: id, text: "late"})
+	m = next.(model)
+	if m.previewText != "" || m.renderPreview() != "" {
+		t.Error("preview result applied while closed")
+	}
+}
+
+// TestPreviewTickKeepsFetchingWhileOpen executes the tick's command batch and
+// asserts it contains the preview fetch — guarding the tickMsg → previewCmd
+// wiring that keeps an open preview fresh, not just previewCmd in isolation
+// (dropping previewCmd from the tick batch would freeze the preview at its
+// first snapshot forever and no other test would notice).
+func TestPreviewTickKeepsFetchingWhileOpen(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m.deps.Store = st // the tick batch also runs reload(), which needs a store
+	m = send(m, "space")
+
+	next, cmd := m.Update(tickMsg{})
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("tick returned no command")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("tick did not return a batch, got %T", cmd())
+	}
+	found := false
+	for _, c := range batch { // Peek fails fast on the nonexistent socket -> empty text
+		if pm, ok := c().(previewMsg); ok && pm.id == m.selectedID() {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("tick batch did not fetch the open preview")
+	}
+}
+
+// TestPreviewClosesOnMoveUpAndFilterNarrow covers the remaining selection-change
+// paths: an up-arrow move, and live filter typing sliding a different session
+// under the cursor.
+func TestPreviewClosesOnMoveUpAndFilterNarrow(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 1)
+	m = send(m, "space")
+	next, _ := m.Update(previewMsg{id: m.selectedID(), text: "peek"})
+	m = next.(model)
+	m = send(m, "up")
+	if m.previewOn || m.renderPreview() != "" {
+		t.Error("up-arrow move should close the preview")
+	}
+
+	m2 := selectSession(newTestModel(sampleSessions()), 0) // wait0001 peeked
+	m2 = send(m2, "space")
+	next2, _ := m2.Update(previewMsg{id: m2.selectedID(), text: "peek"})
+	m2 = next2.(model)
+	m2 = send(m2, "/")
+	for _, r := range "release" { // narrows to done0001; wait0001 drops out
+		m2 = send(m2, string(r))
+	}
+	if m2.previewOn || m2.renderPreview() != "" {
+		t.Error("filter narrowing away the peeked session should close the preview")
+	}
+}
+
+// TestPreviewIgnoresResultForOtherSession guards the id half of the previewMsg
+// acceptance condition: a late result for a session that is no longer selected
+// must not be stored while the preview is open on another session.
+func TestPreviewIgnoresResultForOtherSession(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m = send(m, "space")
+	next, _ := m.Update(previewMsg{id: "someother1", text: "wrong session"})
+	m = next.(model)
+	if m.previewText != "" {
+		t.Errorf("stored a preview for a non-selected session: %q", m.previewText)
+	}
+}
+
+func TestSpaceTypesIntoComposer(t *testing.T) {
+	m := newTestModel(sampleSessions()) // starts on the composer
+	m = send(m, "a")
+	m = send(m, "space")
+	m = send(m, "b")
+	if m.composer.Value() != "a b" {
+		t.Errorf("composer = %q, want %q", m.composer.Value(), "a b")
 	}
 }
