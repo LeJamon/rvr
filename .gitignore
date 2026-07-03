@@ -1,0 +1,31 @@
+# Compiled binaries
+/xanax
+/main
+/dist/
+/build/
+*.exe
+
+# Go build / test artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Local state written during manual testing
+*.db
+*.db-wal
+*.db-shm
+*.raw
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local task notes / build log
+/tasks/

@@ -1,0 +1,386 @@
+// Package tui is the xanax dashboard: an arrow-key-navigated list of sessions
+// plus an always-present prompt box, both treated as selectable rows. Opening a
+// session shells out to `xanax attach` so the live terminal owns the process
+// cleanly (SPEC.md §10).
+package tui
+
+import (
+	"fmt"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"xanax/internal/attach"
+	"xanax/internal/config"
+	"xanax/internal/session"
+	"xanax/internal/store"
+)
+
+// Deps are the services the dashboard needs from the CLI layer.
+type Deps struct {
+	Store     *store.Store
+	Cfg       *config.Config
+	SelfPath  string // path to the xanax binary, for shelling out
+	SocketDir string
+}
+
+// model treats the session list and the prompt box as one navigable column.
+// The arrow keys always move the selection; the prompt box (last row) only
+// accepts text while it is the selected row. When a session is selected, plain
+// letter keys act on it — so no Ctrl-chords are required.
+type model struct {
+	deps     Deps
+	composer textarea.Model
+
+	sessions   []*session.Session // display order (grouped)
+	cursor     int                // selected session index (when !onComposer)
+	onComposer bool               // the prompt box is the selected row
+
+	renaming    bool
+	renameInput textinput.Model
+	renameID    string
+
+	width, height int
+	status        string
+	err           error
+}
+
+type sessionsMsg struct {
+	sessions []*session.Session
+	err      error
+}
+type tickMsg struct{}
+type actionDoneMsg struct{ status string }
+
+// Run starts the dashboard event loop.
+func Run(deps Deps) error {
+	ta := textarea.New()
+	ta.Placeholder = "Paste a prompt and press Enter to launch a new session…"
+	ta.ShowLineNumbers = false
+	ta.Prompt = ""
+	ta.SetHeight(3)
+	ta.CharLimit = 0
+	// White text, and no current-line highlight. The cursor line is styled by
+	// CursorLine (not Text), so it must carry the white foreground too —
+	// otherwise a blank CursorLine drops the color on the line being typed.
+	white := lipgloss.NewStyle().Foreground(colWhite)
+	ta.FocusedStyle.Text = white
+	ta.FocusedStyle.CursorLine = white
+	ta.BlurredStyle.Text = white
+	ta.BlurredStyle.CursorLine = white
+	ta.Focus()
+
+	ri := textinput.New()
+	ri.Prompt = ""
+	ri.CharLimit = 120
+	ri.TextStyle = lipgloss.NewStyle().Foreground(colWhite)
+
+	m := model{deps: deps, composer: ta, renameInput: ri, onComposer: true}
+	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	return err
+}
+
+func (m model) Init() tea.Cmd {
+	return tea.Batch(m.reload(), tickCmd(), textarea.Blink)
+}
+
+func (m model) reload() tea.Cmd {
+	return func() tea.Msg {
+		s, err := m.deps.Store.ListSessions()
+		return sessionsMsg{sessions: grouped(s), err: err}
+	}
+}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		m.composer.SetWidth(max(20, msg.Width-2))
+		m.renameInput.Width = max(20, msg.Width-4)
+		return m, nil
+
+	case sessionsMsg:
+		m.sessions, m.err = msg.sessions, msg.err
+		if len(m.sessions) == 0 {
+			m.cursor = 0
+			if !m.onComposer {
+				m.onComposer = true
+				return m, m.composer.Focus()
+			}
+		} else if m.cursor > len(m.sessions)-1 {
+			m.cursor = len(m.sessions) - 1
+		}
+		return m, nil
+
+	case tickMsg:
+		return m, tea.Batch(m.reload(), tickCmd())
+
+	case actionDoneMsg:
+		m.status = msg.status
+		return m, m.reload()
+
+	case tea.KeyMsg:
+		return m.updateKey(msg)
+	}
+	return m, nil
+}
+
+func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.renaming {
+		return m.updateRenameKey(msg)
+	}
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyUp:
+		return m.moveUp()
+	case tea.KeyDown:
+		return m.moveDown()
+	}
+	if m.onComposer {
+		return m.updateComposerKey(msg)
+	}
+	return m.updateSessionKey(msg)
+}
+
+// moveUp/moveDown treat the prompt box as the row just below the last session.
+func (m model) moveUp() (tea.Model, tea.Cmd) {
+	if m.onComposer {
+		if len(m.sessions) > 0 {
+			m.onComposer = false
+			m.cursor = len(m.sessions) - 1
+			m.composer.Blur()
+		}
+		return m, nil
+	}
+	if m.cursor > 0 {
+		m.cursor--
+	}
+	return m, nil
+}
+
+func (m model) moveDown() (tea.Model, tea.Cmd) {
+	if m.onComposer {
+		return m, nil // already the bottom row
+	}
+	if m.cursor < len(m.sessions)-1 {
+		m.cursor++
+		return m, nil
+	}
+	m.onComposer = true
+	return m, m.composer.Focus()
+}
+
+// updateComposerKey runs while the prompt box is selected: Enter launches a new
+// session, everything else edits the prompt.
+func (m model) updateComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyEnter {
+		if prompt := strings.TrimSpace(m.composer.Value()); prompt != "" {
+			m.composer.Reset()
+			return m, m.execNewBackground(prompt)
+		}
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.composer, cmd = m.composer.Update(msg)
+	return m, cmd
+}
+
+// updateSessionKey runs while a session is selected. Plain letters act on it
+// (nothing is typed), so no Ctrl-chords are needed; the Ctrl variants are kept
+// as aliases.
+func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	s := m.current()
+	if s == nil {
+		return m, nil
+	}
+	switch msg.Type {
+	case tea.KeyEnter, tea.KeyRight:
+		return m, m.openSession(s)
+	case tea.KeyCtrlK:
+		return m, m.execKillRemove(s)
+	case tea.KeyCtrlR:
+		return m, m.execInteractive("resume", s.ID)
+	}
+	switch msg.String() {
+	case "o":
+		return m, m.openSession(s)
+	case "k":
+		return m, m.execKillRemove(s)
+	case "r":
+		return m, m.execInteractive("resume", s.ID)
+	case "e":
+		return m.startRename(s)
+	case "q":
+		return m, tea.Quit
+	}
+	return m, nil
+}
+
+func (m model) startRename(s *session.Session) (tea.Model, tea.Cmd) {
+	m.renaming = true
+	m.renameID = s.ID
+	m.renameInput.SetValue(s.Title)
+	m.renameInput.CursorEnd()
+	return m, m.renameInput.Focus()
+}
+
+// updateRenameKey runs while renaming a session (xanax UI label only).
+func (m model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		title := strings.TrimSpace(m.renameInput.Value())
+		id := m.renameID
+		m.renaming = false
+		m.renameInput.Blur()
+		if title == "" {
+			return m, nil
+		}
+		return m, m.execRename(id, title)
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.renaming = false
+		m.renameInput.Blur()
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.renameInput, cmd = m.renameInput.Update(msg)
+	return m, cmd
+}
+
+// execInteractive shells out to a subcommand that owns the terminal (attach,
+// resume). Bubble Tea releases and restores the terminal around it.
+func (m model) execInteractive(sub string, arg string) tea.Cmd {
+	c := exec.Command(m.deps.SelfPath, sub, arg)
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		if err != nil {
+			return actionDoneMsg{status: fmt.Sprintf("%s failed: %v", sub, err)}
+		}
+		return actionDoneMsg{}
+	})
+}
+
+// execKillRemove terminates a live session and deletes it from the store, so it
+// disappears from the dashboard.
+func (m model) execKillRemove(s *session.Session) tea.Cmd {
+	id := s.ID
+	sock := filepath.Join(m.deps.SocketDir, id+".sock")
+	return func() tea.Msg {
+		if attach.Alive(sock) {
+			_ = attach.Kill(sock)
+		}
+		if err := m.deps.Store.DeleteSession(id); err != nil {
+			return actionDoneMsg{status: "remove failed: " + err.Error()}
+		}
+		return actionDoneMsg{status: "removed " + shortID(id)}
+	}
+}
+
+// execNewBackground launches a new session in the default harness without
+// attaching, so the user stays on the dashboard. "--" stops flag parsing so
+// prompts beginning with "-" are safe.
+func (m model) execNewBackground(prompt string) tea.Cmd {
+	return func() tea.Msg {
+		if err := exec.Command(m.deps.SelfPath, "new", "--no-attach", "--", prompt).Run(); err != nil {
+			return actionDoneMsg{status: "launch failed: " + err.Error()}
+		}
+		return actionDoneMsg{status: "launched: " + truncate(prompt, 50)}
+	}
+}
+
+func (m model) execRename(id, title string) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.deps.Store.SetTitle(id, title); err != nil {
+			return actionDoneMsg{status: "rename failed: " + err.Error()}
+		}
+		return actionDoneMsg{status: "renamed to " + truncate(title, 40)}
+	}
+}
+
+// openSession enters the live agent window, or resumes it natively if the
+// supervisor is gone but a harness session ref was captured.
+func (m model) openSession(s *session.Session) tea.Cmd {
+	if m.alive(s.ID) {
+		return m.execInteractive("attach", s.ID)
+	}
+	if s.HarnessSessionRef != "" {
+		return m.execInteractive("resume", s.ID)
+	}
+	msg := "session " + shortID(s.ID) + " has ended — press k to remove"
+	return func() tea.Msg { return actionDoneMsg{status: msg} }
+}
+
+func (m model) current() *session.Session {
+	if m.onComposer || m.cursor < 0 || m.cursor >= len(m.sessions) {
+		return nil
+	}
+	return m.sessions[m.cursor]
+}
+
+func (m model) alive(id string) bool {
+	return attach.Alive(filepath.Join(m.deps.SocketDir, id+".sock"))
+}
+
+// grouped sorts sessions by state group then recency (SPEC.md §10).
+func grouped(sessions []*session.Session) []*session.Session {
+	out := append([]*session.Session(nil), sessions...)
+	sort.SliceStable(out, func(i, j int) bool {
+		gi, gj := groupRank(out[i].Status), groupRank(out[j].Status)
+		if gi != gj {
+			return gi < gj
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out
+}
+
+func groupRank(s session.Status) int {
+	switch s {
+	case session.StatusWaiting:
+		return 0
+	case session.StatusRunning, session.StatusStarting:
+		return 1
+	case session.StatusCompleted:
+		return 2
+	case session.StatusCancelled:
+		return 3
+	case session.StatusFailed:
+		return 4
+	default:
+		return 5
+	}
+}
+
+func groupLabel(rank int) string {
+	switch rank {
+	case 0:
+		return "Needs input"
+	case 1:
+		return "Running"
+	case 2:
+		return "Completed"
+	case 3:
+		return "Cancelled"
+	case 4:
+		return "Failed"
+	default:
+		return "Other"
+	}
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}

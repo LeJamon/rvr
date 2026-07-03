@@ -1,0 +1,123 @@
+package config_test
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"xanax/internal/config"
+)
+
+func writeConfig(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestLoadDefaultsWhenFileMissing(t *testing.T) {
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "missing.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultHarness != "opencode" {
+		t.Errorf("DefaultHarness = %q, want opencode", cfg.DefaultHarness)
+	}
+	if !cfg.AutoResume {
+		t.Error("AutoResume = false, want true by default")
+	}
+	if cfg.InteractExitKey != `ctrl+\` {
+		t.Errorf("InteractExitKey = %q, want ctrl+\\", cfg.InteractExitKey)
+	}
+	if got := cfg.Harnesses["opencode"].Adapter; got != config.AdapterOpencode {
+		t.Errorf("opencode adapter = %q, want %q", got, config.AdapterOpencode)
+	}
+	if got := cfg.Harnesses["pi"].Adapter; got != config.AdapterPi {
+		t.Errorf("pi adapter = %q, want %q", got, config.AdapterPi)
+	}
+}
+
+func TestLoadMergesFileOverDefaults(t *testing.T) {
+	path := writeConfig(t, `
+default_harness = "pi"
+auto_resume = false
+
+[harness.opencode]
+command = "/opt/opencode/bin/opencode"
+
+[harness.goose]
+command = "goose"
+args = ["session"]
+resume_args = ["session", "--resume"]
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DefaultHarness != "pi" {
+		t.Errorf("DefaultHarness = %q, want pi", cfg.DefaultHarness)
+	}
+	if cfg.AutoResume {
+		t.Error("AutoResume = true, want false from file")
+	}
+	if cfg.InteractExitKey != `ctrl+\` {
+		t.Errorf("InteractExitKey = %q, want default preserved", cfg.InteractExitKey)
+	}
+
+	oc := cfg.Harnesses["opencode"]
+	if oc.Adapter != config.AdapterOpencode {
+		t.Errorf("partial override lost adapter: got %q", oc.Adapter)
+	}
+	if oc.Command != "/opt/opencode/bin/opencode" {
+		t.Errorf("opencode command = %q, want file override", oc.Command)
+	}
+
+	goose := cfg.Harnesses["goose"]
+	if goose.Adapter != config.AdapterGeneric {
+		t.Errorf("new harness adapter = %q, want defaulted to generic", goose.Adapter)
+	}
+	if len(goose.Args) != 1 || goose.Args[0] != "session" {
+		t.Errorf("goose args = %v", goose.Args)
+	}
+	if len(goose.ResumeArgs) != 2 {
+		t.Errorf("goose resume_args = %v", goose.ResumeArgs)
+	}
+}
+
+func TestLoadDefaultsCommandToHarnessName(t *testing.T) {
+	path := writeConfig(t, "[harness.mytool]\nadapter = \"generic\"\n")
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Harnesses["mytool"].Command; got != "mytool" {
+		t.Errorf("command = %q, want harness name", got)
+	}
+}
+
+func TestLoadRejectsUnknownAdapter(t *testing.T) {
+	path := writeConfig(t, "[harness.foo]\nadapter = \"bogus\"\n")
+	_, err := config.Load(path)
+	if err == nil || !strings.Contains(err.Error(), "adapter") {
+		t.Fatalf("want unknown-adapter error, got %v", err)
+	}
+}
+
+func TestLoadRejectsUnknownDefaultHarness(t *testing.T) {
+	path := writeConfig(t, "default_harness = \"nope\"\n")
+	_, err := config.Load(path)
+	if err == nil || !strings.Contains(err.Error(), "default_harness") {
+		t.Fatalf("want unknown default_harness error, got %v", err)
+	}
+}
+
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	path := writeConfig(t, "detachkey = \"typo\"\n")
+	_, err := config.Load(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown key") {
+		t.Fatalf("want unknown-key error, got %v", err)
+	}
+}
