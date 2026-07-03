@@ -28,6 +28,8 @@ func (m model) View() string {
 		b.WriteString(m.renderRename())
 	case m.picking:
 		b.WriteString(m.renderPicker())
+	case m.filtering:
+		b.WriteString(m.renderFilter())
 	default:
 		b.WriteString(m.renderComposer(m.onComposer))
 	}
@@ -64,6 +66,9 @@ func (m model) header() string {
 		line += mutedStyle.Render(" ▸ " + repoName(m.deps.Scope))
 	}
 	line += "   " + summary
+	if m.filter != "" {
+		line += "   " + branchStyle.Render("filter: "+m.filter)
+	}
 	if m.err != nil {
 		line += "   " + errStyle.Render(m.err.Error())
 	}
@@ -182,6 +187,13 @@ func (m model) renderPicker() string {
 	return label + "\n" + hRules(colAccent, m.width).Render(strings.Join(rows, "\n"))
 }
 
+// renderFilter draws the filter input bar.
+func (m model) renderFilter() string {
+	label := groupStyle.Foreground(colAccent).Render("Filter") +
+		mutedStyle.Render("  ·  title / repo / harness — enter apply, esc clear")
+	return label + "\n" + hRules(colAccent, m.width).Render(m.filterInput.View())
+}
+
 // renderRename draws the in-place rename editor for the selected session.
 func (m model) renderRename() string {
 	label := groupStyle.Foreground(colAccent).Render(
@@ -196,10 +208,12 @@ func (m model) footer() string {
 		hint = "enter save · esc cancel"
 	case m.picking:
 		hint = "↑/↓ move · enter select · esc cancel"
+	case m.filtering:
+		hint = "type to filter · enter apply · esc clear"
 	case m.onComposer:
 		hint = "enter launch · ^o launch+attach · tab harness · ↑ sessions · ^c quit"
 	default:
-		hint = "↑/↓ select · →/enter open · e rename · r resume · k remove · ↓ to prompt · ^c quit"
+		hint = "↑/↓ select · →/enter open · e rename · r resume · k remove · / filter · ^c quit"
 	}
 	out := footerStyle.Render(hint)
 	if m.status != "" {

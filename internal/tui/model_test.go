@@ -18,15 +18,18 @@ import (
 
 func newTestModel(sessions []*session.Session) model {
 	cfg := config.Default()
+	grp := grouped(sessions)
 	m := model{
 		deps:        Deps{Cfg: cfg, SocketDir: "/tmp/xanax-nonexistent-test"},
 		composer:    textarea.New(),
 		renameInput: textinput.New(),
+		filterInput: textinput.New(),
 		onComposer:  true,
 		harnesses:   harnessNames(cfg),
 		width:       120,
 		height:      40,
-		sessions:    grouped(sessions),
+		allSessions: grp,
+		sessions:    grp,
 	}
 	m.composer.Focus()
 	return m
@@ -394,6 +397,42 @@ func argsContain(args []string, flag, val string) bool {
 		}
 	}
 	return false
+}
+
+func TestFilterSessions(t *testing.T) {
+	all := sampleSessions() // "refactor auth"(opencode), "which API?"(pi), "release notes"(opencode)
+	if got := filterSessions(all, "pi"); len(got) != 1 || got[0].Harness != "pi" {
+		t.Errorf("harness filter = %v", got)
+	}
+	if got := filterSessions(all, "RELEASE"); len(got) != 1 || got[0].Title != "release notes" {
+		t.Errorf("case-insensitive title filter = %v", got)
+	}
+	if got := filterSessions(all, "nomatch"); len(got) != 0 {
+		t.Errorf("no-match filter = %v", got)
+	}
+	if len(filterSessions(all, "")) != 3 {
+		t.Error("empty filter should keep all")
+	}
+}
+
+func TestFilterModeLiveNarrowsList(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m = send(m, "/") // open filter
+	if !m.filtering {
+		t.Fatal("/ did not open filter")
+	}
+	// Type "release" — only that session remains.
+	for _, r := range "release" {
+		m = send(m, string(r))
+	}
+	if len(m.sessions) != 1 || m.sessions[0].Title != "release notes" {
+		t.Errorf("live filter did not narrow: %d sessions", len(m.sessions))
+	}
+	// Esc clears back to all.
+	m = send(m, "esc")
+	if m.filtering || m.filter != "" || len(m.sessions) != 3 {
+		t.Errorf("esc did not clear filter: filtering=%v filter=%q n=%d", m.filtering, m.filter, len(m.sessions))
+	}
 }
 
 func TestViewRendersWithoutPanic(t *testing.T) {

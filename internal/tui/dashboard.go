@@ -50,13 +50,18 @@ type model struct {
 	picking    bool // harness picker is open
 	pickIdx    int  // highlighted row in the picker
 
-	sessions   []*session.Session // display order (grouped)
-	cursor     int                // selected session index (when !onComposer)
-	onComposer bool               // the prompt box is the selected row
+	allSessions []*session.Session // full scoped list
+	sessions    []*session.Session // filtered display list (grouped)
+	cursor      int                // selected session index (when !onComposer)
+	onComposer  bool               // the prompt box is the selected row
 
 	renaming    bool
 	renameInput textinput.Model
 	renameID    string
+
+	filtering   bool
+	filter      string
+	filterInput textinput.Model
 
 	gitCache     map[string]gitInfo // live branch/PR per repo path
 	gitPollCount int                // gates the slower PR refresh
@@ -109,10 +114,16 @@ func Run(deps Deps) error {
 	ri.CharLimit = 120
 	ri.TextStyle = lipgloss.NewStyle().Foreground(colWhite)
 
+	fi := textinput.New()
+	fi.Prompt = ""
+	fi.CharLimit = 80
+	fi.TextStyle = lipgloss.NewStyle().Foreground(colWhite)
+
 	m := model{
 		deps:        deps,
 		composer:    ta,
 		renameInput: ri,
+		filterInput: fi,
 		onComposer:  true,
 		harnesses:   harnessNames(deps.Cfg),
 	}
@@ -143,6 +154,24 @@ func (m model) reload() tea.Cmd {
 		s, err := m.deps.Store.ListSessions()
 		return sessionsMsg{sessions: grouped(scopeFilter(s, scope)), err: err}
 	}
+}
+
+// filterSessions keeps sessions whose title, repo, or harness contains the
+// (case-insensitive) query. An empty query keeps everything.
+func filterSessions(sessions []*session.Session, query string) []*session.Session {
+	if query == "" {
+		return sessions
+	}
+	q := strings.ToLower(query)
+	out := sessions[:0:0]
+	for _, s := range sessions {
+		if strings.Contains(strings.ToLower(s.Title), q) ||
+			strings.Contains(strings.ToLower(s.RepoPath), q) ||
+			strings.Contains(strings.ToLower(s.Harness), q) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // scopeFilter keeps sessions whose repo equals scope or lives under it. An
@@ -181,7 +210,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessionsMsg:
 		firstLoad := m.gitCache == nil && len(msg.sessions) > 0
-		m.sessions, m.err = msg.sessions, msg.err
+		m.allSessions, m.err = msg.sessions, msg.err
+		m.sessions = filterSessions(m.allSessions, m.filter)
 		if len(m.sessions) == 0 {
 			m.cursor = 0
 			if !m.onComposer {
@@ -246,6 +276,9 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.picking {
 		return m.updatePickKey(msg)
+	}
+	if m.filtering {
+		return m.updateFilterKey(msg)
 	}
 	switch msg.Type {
 	case tea.KeyUp:
@@ -369,6 +402,11 @@ func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlR:
 		return m, m.execInteractive("resume", s.ID)
 	}
+	if msg.Type == tea.KeyEsc && m.filter != "" {
+		m.filter = ""
+		m.sessions = filterSessions(m.allSessions, "")
+		return m, nil
+	}
 	switch msg.String() {
 	case "o":
 		return m, m.openSession(s)
@@ -378,10 +416,46 @@ func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.execInteractive("resume", s.ID)
 	case "e":
 		return m.startRename(s)
+	case "/":
+		m.filtering = true
+		m.filterInput.SetValue(m.filter)
+		m.filterInput.CursorEnd()
+		return m, m.filterInput.Focus()
 	case "q":
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// updateFilterKey runs while the filter bar is open: typing refines the filter
+// live, Enter applies and closes, Esc clears and closes, arrows navigate the
+// filtered list.
+func (m model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		m.filtering = false
+		m.filterInput.Blur()
+		return m, nil
+	case tea.KeyEsc:
+		m.filtering = false
+		m.filter = ""
+		m.filterInput.Blur()
+		m.filterInput.SetValue("")
+		m.sessions = filterSessions(m.allSessions, "")
+		return m, nil
+	case tea.KeyUp:
+		return m.moveUp()
+	case tea.KeyDown:
+		return m.moveDown()
+	}
+	var cmd tea.Cmd
+	m.filterInput, cmd = m.filterInput.Update(msg)
+	m.filter = m.filterInput.Value()
+	m.sessions = filterSessions(m.allSessions, m.filter)
+	if m.cursor >= len(m.sessions) {
+		m.cursor = max(0, len(m.sessions)-1)
+	}
+	return m, cmd
 }
 
 func (m model) startRename(s *session.Session) (tea.Model, tea.Cmd) {
