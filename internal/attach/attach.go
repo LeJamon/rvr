@@ -19,6 +19,19 @@ import (
 	"xanax/internal/wire"
 )
 
+// resetModes returns the client's terminal to a sane state when the
+// attachment ends. Terminals ignore the sequences they don't support.
+var resetModes = []byte("" +
+	"\x1b[<u\x1b[<u\x1b[<u" + // pop Kitty keyboard flags (no-op when stack empty)
+	"\x1b[=0;1u" + //           force Kitty keyboard flags to zero
+	"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l" + // mouse tracking off
+	"\x1b[?2004l" + // bracketed paste off
+	"\x1b[?1004l" + // focus reporting off
+	"\x1b[?2026l" + // synchronized output off
+	"\x1b[?1l" + //   application cursor keys off
+	"\x1b[?1049l" + // leave the alternate screen
+	"\x1b[0m\x1b[?25h") // reset attributes, show cursor
+
 // Result explains why Run returned.
 type Result int
 
@@ -60,6 +73,14 @@ func Run(opts Options) (Result, error) {
 		return Disconnected, err
 	}
 	defer restore()
+	// The harness negotiates terminal modes with the client's terminal through
+	// the passthrough (Kitty keyboard protocol, mouse tracking, bracketed
+	// paste, alt screen, ...). It only disables them when *it* exits — not when
+	// a client detaches — so without a reset they leak into whatever runs next.
+	// (Leaked Kitty keyboard mode encodes Ctrl+C as "CSI 99;5u", which the
+	// dashboard cannot recognize — quit appears broken.) This is what tmux does
+	// to the client terminal on detach.
+	defer opts.Out.Write(resetModes)
 
 	sendResize(conn, opts.Out)
 	stopWinch := watchWinch(conn, opts.Out)

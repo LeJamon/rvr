@@ -1,6 +1,92 @@
 package attach
 
-import "testing"
+import (
+	"bytes"
+	"net"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"xanax/internal/wire"
+)
+
+// TestRunResetsTerminalModesOnDetach verifies the client writes the
+// mode-reset sequence when the attachment ends, so harness-enabled modes
+// (Kitty keyboard, mouse, ...) don't leak into whatever runs next.
+func TestRunResetsTerminalModesOnDetach(t *testing.T) {
+	sockDir, err := os.MkdirTemp("/tmp", "xnxat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(sockDir)
+	sock := filepath.Join(sockDir, "s.sock")
+
+	// Fake supervisor: accept, greet, then echo nothing and wait.
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		wire.WriteJSON(conn, wire.TypeHello, wire.Info{SessionID: "x"})
+		// Drain client frames until it disconnects.
+		for {
+			if _, err := wire.Read(conn); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Pipes stand in for the terminal (not a TTY: raw-mode is a no-op).
+	inR, inW, _ := os.Pipe()
+	outR, outW, _ := os.Pipe()
+	defer outR.Close()
+
+	got := make(chan []byte, 1)
+	go func() {
+		buf := make([]byte, 64*1024)
+		var all []byte
+		for {
+			n, err := outR.Read(buf)
+			all = append(all, buf[:n]...)
+			if err != nil {
+				break
+			}
+		}
+		got <- all
+	}()
+
+	resCh := make(chan Result, 1)
+	go func() {
+		res, _ := Run(Options{SocketPath: sock, In: inR, Out: outW})
+		outW.Close() // let the collector finish
+		resCh <- res
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	inW.Write([]byte{0x1c}) // ctrl+\ -> detach
+
+	select {
+	case res := <-resCh:
+		if res != Detached {
+			t.Fatalf("Run returned %v, want Detached", res)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after detach")
+	}
+	inW.Close()
+
+	out := <-got
+	if !bytes.Contains(out, resetModes) {
+		t.Errorf("terminal reset sequence not written on detach; got %q", out)
+	}
+}
 
 func TestFindDetach(t *testing.T) {
 	const exit = 0x1c // ctrl+\
