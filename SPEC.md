@@ -152,8 +152,16 @@ Unix socket server ──► attach / input / resize / subscribe / kill / info
     while no client is connected; once a client attaches, its real terminal answers and
     the supervisor stays quiet (no double replies).
 - **Detach triggers.** The attach client detaches on `ctrl+\` (configurable
-  `interact_exit_key`) **or the Left arrow** (`ESC[D`/`ESCOD`) — Left returns you to
-  the dashboard. Left arrow is therefore not forwarded to the harness.
+  `interact_exit_key`) **or the Left arrow** — Left returns you to the dashboard and is
+  therefore not forwarded to the harness. Both triggers are recognized in every
+  encoding a harness may negotiate through the passthrough. The Left arrow: legacy
+  `ESC[D`, application cursor `ESCOD`, and the Kitty keyboard protocol's parameterized
+  forms (`ESC[1D`, `ESC[1;1D`) that harnesses like codex push (`CSI > u`). The exit key:
+  the raw control byte and, under the Kitty disambiguate flag, its `CSI u` form (`ctrl+\`
+  → `ESC[92;5u`). Only an *unmodified key press* detaches: `Ctrl`/`Alt`/`Shift`+Left pass
+  through for word navigation and selection, and repeat/release events are ignored so a
+  modifier released just before Left (reported as an unmodified Left release) does not
+  eject you mid-edit.
 
 ## 5. Adapter architecture
 
@@ -352,6 +360,15 @@ args        = ["session"]                # start goose's interactive session
 resume_args = ["session", "--resume"]    # resume the most recent session
 # A CLI that accepts the prompt as a flag can add prompt_arg = "--flag"
 # (or prompt_positional = true) to deliver it on the command line instead.
+
+# codex is a full-screen TUI: deliver the prompt positionally and resume
+# natively so xanax never types into its input (which would race startup).
+[harness.codex]
+adapter           = "generic"
+command           = "codex"
+prompt_positional = true                  # codex "<prompt>" starts a session with it
+resume_args       = ["resume", "--last"]  # reattach to the most recent session
+idle_timeout      = 120                   # no native state; mark "waiting" when idle
 ```
 
 Defaults for opencode and pi are built in; the file is optional.
