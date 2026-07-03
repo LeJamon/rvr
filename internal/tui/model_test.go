@@ -50,6 +50,8 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlO}
 	case "ctrl+k":
 		return tea.KeyMsg{Type: tea.KeyCtrlK}
+	case "ctrl+c":
+		return tea.KeyMsg{Type: tea.KeyCtrlC}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -256,6 +258,45 @@ func TestTabOpensPickerAndSelectsHarness(t *testing.T) {
 		if args[i] != want[i] {
 			t.Fatalf("args = %v, want %v", args, want)
 		}
+	}
+}
+
+// isQuit reports whether cmd produces tea.Quit.
+func isQuit(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	_, ok := cmd().(tea.QuitMsg)
+	return ok
+}
+
+func TestCtrlCQuitsFromEveryMode(t *testing.T) {
+	// Composer focused.
+	m := newTestModel(sampleSessions())
+	if _, cmd := m.Update(key("ctrl+c")); !isQuit(cmd) {
+		t.Error("ctrl+c did not quit from the composer")
+	}
+	// Session selected.
+	m2 := selectSession(newTestModel(sampleSessions()), 0)
+	if _, cmd := m2.Update(key("ctrl+c")); !isQuit(cmd) {
+		t.Error("ctrl+c did not quit with a session selected")
+	}
+	// Harness picker open.
+	m3 := send(newTestModel(nil), "tab")
+	if !m3.picking {
+		t.Fatal("picker did not open")
+	}
+	if _, cmd := m3.Update(key("ctrl+c")); !isQuit(cmd) {
+		t.Error("ctrl+c did not quit from the harness picker")
+	}
+	// Renaming.
+	m4 := selectSession(newTestModel(sampleSessions()), 0)
+	m4 = send(m4, "e")
+	if !m4.renaming {
+		t.Fatal("rename did not open")
+	}
+	if _, cmd := m4.Update(key("ctrl+c")); !isQuit(cmd) {
+		t.Error("ctrl+c did not quit while renaming")
 	}
 }
 

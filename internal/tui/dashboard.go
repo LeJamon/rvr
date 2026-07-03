@@ -172,6 +172,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Ctrl+C always quits, regardless of mode (Esc is the cancel key).
+	if msg.Type == tea.KeyCtrlC {
+		return m, tea.Quit
+	}
 	if m.renaming {
 		return m.updateRenameKey(msg)
 	}
@@ -179,8 +183,6 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updatePickKey(msg)
 	}
 	switch msg.Type {
-	case tea.KeyCtrlC:
-		return m, tea.Quit
 	case tea.KeyUp:
 		return m.moveUp()
 	case tea.KeyDown:
@@ -267,7 +269,7 @@ func (m model) updatePickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.harnessIdx = m.pickIdx
 		m.picking = false
 		return m, m.composer.Focus()
-	case tea.KeyEsc, tea.KeyTab, tea.KeyCtrlC:
+	case tea.KeyEsc, tea.KeyTab:
 		m.picking = false
 		return m, m.composer.Focus()
 	}
@@ -325,7 +327,7 @@ func (m model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.execRename(id, title)
-	case tea.KeyEsc, tea.KeyCtrlC:
+	case tea.KeyEsc:
 		m.renaming = false
 		m.renameInput.Blur()
 		return m, nil
