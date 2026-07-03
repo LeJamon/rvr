@@ -85,6 +85,13 @@ command = "opencode"
 adapter = "pi"
 command = "pi"
 
+# Optional TUI colors — ANSI palette index ("0"–"255") or hex ("#rgb"/"#rrggbb").
+# Any omitted field keeps its default; see `xanax config` for the full set.
+[theme]
+accent    = "13"   # selection / cursor
+muted     = "244"  # secondary text and rules
+branch    = "6"    # git branch on rows
+
 # Any other PTY CLI works via the generic adapter:
 [harness.goose]
 adapter     = "generic"

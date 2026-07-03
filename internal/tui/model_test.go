@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"xanax/internal/config"
 	"xanax/internal/session"
@@ -461,6 +462,21 @@ func TestFilterModeLiveNarrowsList(t *testing.T) {
 	m = send(m, "esc")
 	if m.filtering || m.filter != "" || len(m.sessions) != 3 {
 		t.Errorf("esc did not clear filter: filtering=%v filter=%q n=%d", m.filtering, m.filter, len(m.sessions))
+	}
+}
+
+func TestApplyThemeChangesColors(t *testing.T) {
+	t.Cleanup(func() { applyTheme(config.Default().Theme) }) // restore for other tests
+	applyTheme(config.Theme{
+		Accent: "#123456", Muted: "240", Text: "15", Waiting: "3", Running: "4",
+		Completed: "2", Failed: "1", Cancelled: "8", Branch: "5", PR: "6",
+	})
+	if colAccent != lipgloss.Color("#123456") {
+		t.Errorf("accent not applied: %v", colAccent)
+	}
+	// Derived styles pick up the new accent.
+	if titleStyle.GetForeground() != lipgloss.Color("#123456") {
+		t.Errorf("titleStyle foreground not rebuilt: %v", titleStyle.GetForeground())
 	}
 }
 

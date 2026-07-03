@@ -8,6 +8,8 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -36,7 +38,24 @@ type Config struct {
 	InteractExitKey string             `toml:"interact_exit_key"`
 	AutoResume      bool               `toml:"auto_resume"`
 	Notifications   bool               `toml:"notifications"`
+	Theme           Theme              `toml:"theme"`
 	Harnesses       map[string]Harness `toml:"harness"`
+}
+
+// Theme colors the dashboard TUI. Each value is an ANSI palette index ("0"–
+// "255") or a hex color ("#rgb" or "#rrggbb"). Empty fields fall back to the
+// defaults.
+type Theme struct {
+	Accent    string `toml:"accent"`    // selection / cursor
+	Waiting   string `toml:"waiting"`   // needs-input state
+	Running   string `toml:"running"`   // running state
+	Completed string `toml:"completed"` // completed state
+	Failed    string `toml:"failed"`    // failed state
+	Cancelled string `toml:"cancelled"` // cancelled state
+	Muted     string `toml:"muted"`     // secondary text / rules
+	Text      string `toml:"text"`      // prompt input text
+	Branch    string `toml:"branch"`    // git branch
+	PR        string `toml:"pr"`        // PR number
 }
 
 // Paths locates everything xanax reads or writes on disk (SPEC.md §7).
@@ -81,10 +100,49 @@ func Default() *Config {
 		InteractExitKey: `ctrl+\`,
 		AutoResume:      true,
 		Notifications:   true,
+		Theme:           DefaultTheme(),
 		Harnesses: map[string]Harness{
 			"opencode": {Adapter: AdapterOpencode, Command: "opencode"},
 			"pi":       {Adapter: AdapterPi, Command: "pi"},
 		},
+	}
+}
+
+// DefaultTheme is the built-in color scheme (ANSI palette indices).
+func DefaultTheme() Theme {
+	return Theme{
+		Accent:    "13",  // magenta
+		Waiting:   "11",  // yellow
+		Running:   "12",  // blue
+		Completed: "10",  // green
+		Failed:    "9",   // red
+		Cancelled: "8",   // grey
+		Muted:     "244", // dim grey
+		Text:      "15",  // white
+		Branch:    "6",   // cyan
+		PR:        "10",  // green
+	}
+}
+
+// mergeTheme overlays the non-empty fields of over onto base.
+func mergeTheme(base, over Theme) Theme {
+	pick := func(b, o string) string {
+		if o != "" {
+			return o
+		}
+		return b
+	}
+	return Theme{
+		Accent:    pick(base.Accent, over.Accent),
+		Waiting:   pick(base.Waiting, over.Waiting),
+		Running:   pick(base.Running, over.Running),
+		Completed: pick(base.Completed, over.Completed),
+		Failed:    pick(base.Failed, over.Failed),
+		Cancelled: pick(base.Cancelled, over.Cancelled),
+		Muted:     pick(base.Muted, over.Muted),
+		Text:      pick(base.Text, over.Text),
+		Branch:    pick(base.Branch, over.Branch),
+		PR:        pick(base.PR, over.PR),
 	}
 }
 
@@ -95,6 +153,7 @@ type fileConfig struct {
 	InteractExitKey *string            `toml:"interact_exit_key"`
 	AutoResume      *bool              `toml:"auto_resume"`
 	Notifications   *bool              `toml:"notifications"`
+	Theme           Theme              `toml:"theme"`
 	Harness         map[string]Harness `toml:"harness"`
 }
 
@@ -133,6 +192,7 @@ func Load(path string) (*Config, error) {
 	if fc.Notifications != nil {
 		cfg.Notifications = *fc.Notifications
 	}
+	cfg.Theme = mergeTheme(cfg.Theme, fc.Theme)
 	for name, fh := range fc.Harness {
 		merged := cfg.Harnesses[name]
 		if fh.Adapter != "" {
@@ -180,5 +240,52 @@ func (c *Config) validate() error {
 				name, h.Adapter, AdapterOpencode, AdapterPi, AdapterGeneric)
 		}
 	}
+	if err := c.Theme.validate(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validate rejects theme colors that are neither an ANSI palette index nor a
+// hex color. Load merges defaults in first, so every field is populated here.
+func (t Theme) validate() error {
+	for _, f := range []struct{ name, val string }{
+		{"accent", t.Accent},
+		{"waiting", t.Waiting},
+		{"running", t.Running},
+		{"completed", t.Completed},
+		{"failed", t.Failed},
+		{"cancelled", t.Cancelled},
+		{"muted", t.Muted},
+		{"text", t.Text},
+		{"branch", t.Branch},
+		{"pr", t.PR},
+	} {
+		if !validColor(f.val) {
+			return fmt.Errorf("theme %s: invalid color %q (want ANSI index \"0\"–\"255\" or hex \"#rgb\"/\"#rrggbb\")",
+				f.name, f.val)
+		}
+	}
+	return nil
+}
+
+// validColor reports whether s is one of the forms lipgloss.Color renders: an
+// ANSI palette index ("0"–"255"), or a hex color in short "#rgb" or long
+// "#rrggbb" form (both accepted by go-colorful's Hex, which the renderer uses).
+func validColor(s string) bool {
+	if strings.HasPrefix(s, "#") {
+		if len(s) != 4 && len(s) != 7 {
+			return false
+		}
+		for _, c := range s[1:] {
+			switch {
+			case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+			default:
+				return false
+			}
+		}
+		return true
+	}
+	n, err := strconv.Atoi(s)
+	return err == nil && n >= 0 && n <= 255
 }

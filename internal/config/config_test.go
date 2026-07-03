@@ -87,6 +87,38 @@ resume_args = ["session", "--resume"]
 	}
 }
 
+func TestThemeMergeOverridesOnlyProvidedFields(t *testing.T) {
+	path := writeConfig(t, `
+[theme]
+accent = "#ff8800"
+branch = "5"
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Theme.Accent != "#ff8800" {
+		t.Errorf("accent = %q, want overridden hex", cfg.Theme.Accent)
+	}
+	if cfg.Theme.Branch != "5" {
+		t.Errorf("branch = %q, want overridden", cfg.Theme.Branch)
+	}
+	// Unspecified fields keep the defaults.
+	def := config.DefaultTheme()
+	if cfg.Theme.Waiting != def.Waiting || cfg.Theme.Failed != def.Failed {
+		t.Errorf("unspecified theme fields were not defaulted: %+v", cfg.Theme)
+	}
+}
+
+func TestDefaultThemeFullyPopulated(t *testing.T) {
+	th := config.DefaultTheme()
+	if th.Accent == "" || th.Muted == "" || th.Text == "" || th.PR == "" ||
+		th.Waiting == "" || th.Running == "" || th.Completed == "" ||
+		th.Failed == "" || th.Cancelled == "" || th.Branch == "" {
+		t.Errorf("DefaultTheme has empty fields: %+v", th)
+	}
+}
+
 func TestLoadDefaultsCommandToHarnessName(t *testing.T) {
 	path := writeConfig(t, "[harness.mytool]\nadapter = \"generic\"\n")
 	cfg, err := config.Load(path)
@@ -119,5 +151,45 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 	_, err := config.Load(path)
 	if err == nil || !strings.Contains(err.Error(), "unknown key") {
 		t.Fatalf("want unknown-key error, got %v", err)
+	}
+}
+
+func TestLoadRejectsInvalidThemeColor(t *testing.T) {
+	for _, bad := range []string{"256", "300", "-1", "gren", "13.5", "0x0d",
+		"#zzzzzz", "#ff88", "#ff8800aa", "13 ", " 13"} {
+		path := writeConfig(t, "[theme]\naccent = \""+bad+"\"\n")
+		_, err := config.Load(path)
+		if err == nil || !strings.Contains(err.Error(), "theme accent") {
+			t.Errorf("accent=%q: want theme-color error, got %v", bad, err)
+		}
+	}
+}
+
+func TestLoadAcceptsValidThemeColors(t *testing.T) {
+	path := writeConfig(t, `
+[theme]
+accent    = "0"
+waiting   = "255"
+running   = "#ff8800"
+completed = "#FFAA00"
+failed    = "#f80"
+cancelled = "#FFF"
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Theme.Accent != "0" || cfg.Theme.Running != "#ff8800" || cfg.Theme.Failed != "#f80" {
+		t.Errorf("valid theme colors not applied: %+v", cfg.Theme)
+	}
+}
+
+// The built-in defaults must themselves pass validation. Load merges DefaultTheme
+// under any present config, so an empty file routes every default field through
+// validate — this fails loudly if a default is ever set to an invalid color.
+func TestDefaultThemePassesValidation(t *testing.T) {
+	path := writeConfig(t, "auto_resume = true\n")
+	if _, err := config.Load(path); err != nil {
+		t.Fatalf("default theme failed validation: %v", err)
 	}
 }
