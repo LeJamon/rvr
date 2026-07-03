@@ -100,7 +100,7 @@ func (m model) renderRow(s *session.Session, selected bool) string {
 // renderComposer draws the always-on prompt block: a label plus the input
 // framed by full-width top+bottom rules — accent when the box is selected
 // (typing goes here), grey otherwise. The label names the harness the next
-// session will use; Tab cycles it.
+// session will use; Tab opens the picker to switch it.
 func (m model) renderComposer(selected bool) string {
 	color := colMuted
 	label := mutedStyle.Render(
@@ -108,7 +108,11 @@ func (m model) renderComposer(selected bool) string {
 	if selected {
 		color = colAccent
 		title := groupStyle.Foreground(colAccent).Render("New " + m.harness() + " session")
-		label = title + mutedStyle.Render("  ·  tab to switch harness")
+		hint := "  ·  type a prompt, enter to launch"
+		if len(m.harnesses) > 1 { // only when Tab has a harness to switch to
+			hint = "  ·  tab to switch harness"
+		}
+		label = title + mutedStyle.Render(hint)
 	}
 	return label + "\n" + hRules(color, m.width).Render(m.composer.View())
 }
@@ -149,7 +153,10 @@ func (m model) footer() string {
 	case m.picking:
 		hint = "↑/↓ move · enter select · esc cancel"
 	case m.onComposer:
-		hint = "enter launch · ^o launch+attach · tab harness · ↑ sessions · ^c quit"
+		hint = "enter launch · ^o launch+attach · ↑ sessions · ^c quit"
+		if len(m.harnesses) > 1 {
+			hint = "enter launch · ^o launch+attach · tab harness · ↑ sessions · ^c quit"
+		}
 	default:
 		hint = "↑/↓ select · →/enter open · e rename · r resume · k remove · ↓ to prompt · ^c quit"
 	}
