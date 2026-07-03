@@ -19,15 +19,18 @@ import (
 
 func newTestModel(sessions []*session.Session) model {
 	cfg := config.Default()
+	grp := grouped(sessions)
 	m := model{
 		deps:        Deps{Cfg: cfg, SocketDir: "/tmp/xanax-nonexistent-test"},
 		composer:    textarea.New(),
 		renameInput: textinput.New(),
+		filterInput: textinput.New(),
 		onComposer:  true,
 		harnesses:   harnessNames(cfg),
 		width:       120,
 		height:      40,
-		sessions:    grouped(sessions),
+		allSessions: grp,
+		sessions:    grp,
 	}
 	m.composer.Focus()
 	return m
@@ -250,7 +253,7 @@ func TestTabOpensPickerAndSelectsHarness(t *testing.T) {
 		t.Errorf("harness = %q, want pi after picking", m.harness())
 	}
 	// The choice drives the launch args.
-	args := newSessionArgs(m.harness(), "do things", false)
+	args := newSessionArgs(m.harness(), "", "do things", false)
 	want := []string{"new", "--harness", "pi", "--no-attach", "--", "do things"}
 	if !slices.Equal(args, want) {
 		t.Fatalf("args = %v, want %v", args, want)
@@ -335,7 +338,7 @@ func TestCtrlOLaunchesAndAttaches(t *testing.T) {
 }
 
 func TestNewSessionArgsAttach(t *testing.T) {
-	args := newSessionArgs("opencode", "-starts with dash", true)
+	args := newSessionArgs("opencode", "", "-starts with dash", true)
 	want := []string{"new", "--harness", "opencode", "--", "-starts with dash"}
 	if !slices.Equal(args, want) {
 		t.Fatalf("args = %v, want %v", args, want)
@@ -377,6 +380,164 @@ func TestLaunchFailureDoesNotClobberNewText(t *testing.T) {
 	m = next.(model)
 	if m.composer.Value() != "something new" {
 		t.Errorf("composer clobbered: %q, want %q", m.composer.Value(), "something new")
+	}
+}
+
+func TestScopeFilter(t *testing.T) {
+	sessions := []*session.Session{
+		{ID: "1", RepoPath: "/home/u/proj"},
+		{ID: "2", RepoPath: "/home/u/proj/sub"},
+		{ID: "3", RepoPath: "/home/u/proj2"}, // sibling with shared prefix
+		{ID: "4", RepoPath: "/home/u/other"},
+	}
+	got := scopeFilter(sessions, "/home/u/proj")
+	ids := map[string]bool{}
+	for _, s := range got {
+		ids[s.ID] = true
+	}
+	if !ids["1"] || !ids["2"] {
+		t.Errorf("scope should include the repo and nested repos: %v", ids)
+	}
+	if ids["3"] {
+		t.Error("scope must not match a sibling sharing the path prefix (/home/u/proj2)")
+	}
+	if ids["4"] {
+		t.Error("scope must not match an unrelated repo")
+	}
+	// Empty scope keeps everything.
+	if len(scopeFilter(sessions, "")) != 4 {
+		t.Error("empty scope should keep all sessions")
+	}
+}
+
+func TestScopedLaunchTargetsRepo(t *testing.T) {
+	m := newTestModel(nil)
+	m.deps.Scope = "/work/repo"
+	args := newSessionArgs(m.harness(), m.deps.Scope, "do it", false)
+	if !argsContain(args, "--repo", "/work/repo") {
+		t.Errorf("scoped launch missing --repo /work/repo: %v", args)
+	}
+}
+
+func argsContain(args []string, flag, val string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == val {
+			return true
+		}
+	}
+	return false
+}
+
+func TestFilterSessions(t *testing.T) {
+	all := sampleSessions() // "refactor auth"(opencode), "which API?"(pi), "release notes"(opencode)
+	if got := filterSessions(all, "pi"); len(got) != 1 || got[0].Harness != "pi" {
+		t.Errorf("harness filter = %v", got)
+	}
+	if got := filterSessions(all, "RELEASE"); len(got) != 1 || got[0].Title != "release notes" {
+		t.Errorf("case-insensitive title filter = %v", got)
+	}
+	if got := filterSessions(all, "nomatch"); len(got) != 0 {
+		t.Errorf("no-match filter = %v", got)
+	}
+	if len(filterSessions(all, "")) != 3 {
+		t.Error("empty filter should keep all")
+	}
+}
+
+func TestFilterModeLiveNarrowsList(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m = send(m, "/") // open filter
+	if !m.filtering {
+		t.Fatal("/ did not open filter")
+	}
+	// Type "release" — only that session remains.
+	for _, r := range "release" {
+		m = send(m, string(r))
+	}
+	if len(m.sessions) != 1 || m.sessions[0].Title != "release notes" {
+		t.Errorf("live filter did not narrow: %d sessions", len(m.sessions))
+	}
+	// Esc clears back to all.
+	m = send(m, "esc")
+	if m.filtering || m.filter != "" || len(m.sessions) != 3 {
+		t.Errorf("esc did not clear filter: filtering=%v filter=%q n=%d", m.filtering, m.filter, len(m.sessions))
+	}
+}
+
+// TestReloadKeepsSelectionByID guards against the cursor (a list index) sliding
+// onto a different session when the periodic reload re-sorts the list — which
+// would make k/enter act on the wrong session.
+func TestReloadKeepsSelectionByID(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 2) // the completed row, last
+	selID := m.current().ID
+
+	// A new waiting session appears; grouped() sorts it to the top, pushing the
+	// completed row's index from 2 to 3.
+	extra := &session.Session{
+		ID: "wait0002", Title: "new", Harness: "pi", RepoPath: "/x/d",
+		Status: session.StatusWaiting, CreatedAt: time.Now(),
+	}
+	next, _ := m.Update(sessionsMsg{sessions: grouped(append(sampleSessions(), extra))})
+	m = next.(model)
+
+	if got := m.current(); got == nil || got.ID != selID {
+		t.Fatalf("selection not preserved by ID across reload: got %v, want %s", got, selID)
+	}
+}
+
+// TestReloadWhileFilteringZeroKeepsSelection guards the case where a background
+// reload arrives while the filter bar is open and currently matches nothing:
+// it must not yank focus to the composer (which would silently drop the
+// selection once matches return).
+func TestReloadWhileFilteringZeroKeepsSelection(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m = send(m, "/")
+	for _, r := range "zzz" { // matches nothing
+		m = send(m, string(r))
+	}
+	if len(m.sessions) != 0 {
+		t.Fatalf("expected 0 matches, got %d", len(m.sessions))
+	}
+	next, _ := m.Update(sessionsMsg{sessions: grouped(sampleSessions())})
+	m = next.(model)
+	if m.onComposer {
+		t.Error("reload during an empty filter stole focus to the composer")
+	}
+	if !m.filtering {
+		t.Error("filter bar should stay open across the reload")
+	}
+}
+
+// TestReloadEmptyWithFilterFocusesComposer guards the flip side of the case
+// above: when the underlying list becomes genuinely empty while a filter string
+// is still set (e.g. the last matching session was removed with k), the
+// composer MUST be focused — otherwise current() is nil and every keystroke is
+// silently dropped with no way back but the arrow keys.
+func TestReloadEmptyWithFilterFocusesComposer(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m.filter = "refactor" // applied filter matching one session
+	m.sessions = filterSessions(m.allSessions, m.filter)
+	// That session is removed → the reload delivers zero sessions.
+	next, _ := m.Update(sessionsMsg{sessions: nil})
+	m = next.(model)
+	if !m.onComposer {
+		t.Fatal("genuinely-empty list with a filter set must focus the composer")
+	}
+}
+
+// TestEscClearsFilterWhenAllHidden verifies Esc still clears an applied filter
+// when it currently hides every row (current() == nil), so the user is never
+// trapped in an empty filtered view.
+func TestEscClearsFilterWhenAllHidden(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m.filter = "zzz" // applied filter that matches nothing
+	m.sessions = filterSessions(m.allSessions, m.filter)
+	if len(m.sessions) != 0 {
+		t.Fatalf("expected 0 matches, got %d", len(m.sessions))
+	}
+	m = send(m, "esc")
+	if m.filter != "" || len(m.sessions) != 3 {
+		t.Errorf("esc did not clear filter on empty view: filter=%q n=%d", m.filter, len(m.sessions))
 	}
 }
 

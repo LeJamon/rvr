@@ -29,6 +29,9 @@ type Deps struct {
 	Cfg       *config.Config
 	SelfPath  string // path to the xanax binary, for shelling out
 	SocketDir string
+	// Scope, when set, restricts the dashboard to sessions under this absolute
+	// path and launches new sessions there. Empty = all sessions, cwd launches.
+	Scope string
 }
 
 // model treats the session list and the prompt box as one navigable column.
@@ -47,18 +50,31 @@ type model struct {
 	picking    bool // harness picker is open
 	pickIdx    int  // highlighted row in the picker
 
-	sessions   []*session.Session // display order (grouped)
-	cursor     int                // selected session index (when !onComposer)
-	onComposer bool               // the prompt box is the selected row
+	allSessions []*session.Session // full scoped list
+	sessions    []*session.Session // filtered display list (grouped)
+	cursor      int                // selected session index (when !onComposer)
+	onComposer  bool               // the prompt box is the selected row
 
 	renaming    bool
 	renameInput textinput.Model
 	renameID    string
 
+	filtering   bool
+	filter      string
+	filterInput textinput.Model
+
+	gitCache     map[string]gitInfo // live branch/PR per repo path
+	gitPollCount int                // gates the slower PR refresh
+
+	previewID   string // session id the current preview belongs to
+	previewText string // last fetched preview of the selected session
+
 	width, height int
 	status        string
 	err           error
 }
+
+const previewRows = 8
 
 // harness returns the currently selected harness for new sessions.
 func (m model) harness() string {
@@ -105,10 +121,16 @@ func Run(deps Deps) error {
 	ri.CharLimit = 120
 	ri.TextStyle = lipgloss.NewStyle().Foreground(colWhite)
 
+	fi := textinput.New()
+	fi.Prompt = ""
+	fi.CharLimit = 80
+	fi.TextStyle = lipgloss.NewStyle().Foreground(colWhite)
+
 	m := model{
 		deps:        deps,
 		composer:    ta,
 		renameInput: ri,
+		filterInput: fi,
 		onComposer:  true,
 		harnesses:   harnessNames(deps.Cfg),
 	}
@@ -130,18 +152,59 @@ func harnessNames(cfg *config.Config) []string {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.reload(), tickCmd(), textarea.Blink)
+	return tea.Batch(m.reload(), tickCmd(), gitTickCmd(), textarea.Blink)
 }
 
 func (m model) reload() tea.Cmd {
+	scope := m.deps.Scope
 	return func() tea.Msg {
 		s, err := m.deps.Store.ListSessions()
-		return sessionsMsg{sessions: grouped(s), err: err}
+		return sessionsMsg{sessions: grouped(scopeFilter(s, scope)), err: err}
 	}
+}
+
+// filterSessions keeps sessions whose title, repo, or harness contains the
+// (case-insensitive) query. An empty query keeps everything.
+func filterSessions(sessions []*session.Session, query string) []*session.Session {
+	if query == "" {
+		return sessions
+	}
+	q := strings.ToLower(query)
+	out := sessions[:0:0]
+	for _, s := range sessions {
+		if strings.Contains(strings.ToLower(s.Title), q) ||
+			strings.Contains(strings.ToLower(s.RepoPath), q) ||
+			strings.Contains(strings.ToLower(s.Harness), q) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// scopeFilter keeps sessions whose repo equals scope or lives under it. An
+// empty scope keeps everything.
+func scopeFilter(sessions []*session.Session, scope string) []*session.Session {
+	if scope == "" {
+		return sessions
+	}
+	prefix := scope + string(filepath.Separator)
+	out := sessions[:0:0]
+	for _, s := range sessions {
+		if s.RepoPath == scope || strings.HasPrefix(s.RepoPath, prefix) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+type gitTickMsg struct{}
+
+func gitTickCmd() tea.Cmd {
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return gitTickMsg{} })
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -153,20 +216,52 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case sessionsMsg:
-		m.sessions, m.err = msg.sessions, msg.err
-		if len(m.sessions) == 0 {
-			m.cursor = 0
-			if !m.onComposer {
-				m.onComposer = true
-				return m, m.composer.Focus()
-			}
-		} else if m.cursor > len(m.sessions)-1 {
-			m.cursor = len(m.sessions) - 1
+		firstLoad := m.gitCache == nil && len(msg.sessions) > 0
+		prevID := m.selectedID()
+		m.allSessions, m.err = msg.sessions, msg.err
+		m.sessions = filterSessions(m.allSessions, m.filter)
+		var selCmd tea.Cmd
+		m, selCmd = m.reselect(prevID)
+		if firstLoad {
+			// Show branches promptly rather than waiting for the 5 s git tick
+			// (branches only — the slower gh PR lookup stays on the tick).
+			m.gitCache = make(map[string]gitInfo)
+			return m, tea.Batch(selCmd, gitPollCmd(uniqueRepos(m), false))
+		}
+		return m, selCmd
+
+	case tickMsg:
+		return m, tea.Batch(m.reload(), tickCmd(), m.previewCmd())
+
+	case previewMsg:
+		if msg.id == m.selectedID() { // ignore stale results after moving
+			m.previewID, m.previewText = msg.id, msg.text
 		}
 		return m, nil
 
-	case tickMsg:
-		return m, tea.Batch(m.reload(), tickCmd())
+	case gitTickMsg:
+		// Refresh PR numbers only every 12th tick (~60 s); branches every tick.
+		pollPR := m.gitPollCount%12 == 0
+		m.gitPollCount++
+		return m, tea.Batch(gitPollCmd(uniqueRepos(m), pollPR), gitTickCmd())
+
+	case gitInfoMsg:
+		if m.gitCache == nil {
+			m.gitCache = make(map[string]gitInfo)
+		}
+		for repo, gi := range msg.infos {
+			// Branches are polled every tick (~5 s), PR numbers only every ~60 s.
+			// On a branch-only poll keep the cached PR — but only while the branch
+			// is unchanged, since a checkout invalidates the old branch's PR (else
+			// the row would pair the new branch with a stale, unrelated #number).
+			if !msg.polledPR {
+				if prev, ok := m.gitCache[repo]; ok && prev.branch == gi.branch {
+					gi.pr = prev.pr
+				}
+			}
+			m.gitCache[repo] = gi
+		}
+		return m, nil
 
 	case actionDoneMsg:
 		m.status = msg.status
@@ -195,6 +290,9 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.picking {
 		return m.updatePickKey(msg)
 	}
+	if m.filtering {
+		return m.updateFilterKey(msg)
+	}
 	switch msg.Type {
 	case tea.KeyUp:
 		return m.moveUp()
@@ -209,30 +307,42 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // moveUp/moveDown treat the prompt box as the row just below the last session.
 func (m model) moveUp() (tea.Model, tea.Cmd) {
+	prev := m.selectedID()
 	if m.onComposer {
 		if len(m.sessions) > 0 {
 			m.onComposer = false
 			m.cursor = len(m.sessions) - 1
 			m.composer.Blur()
 		}
-		return m, nil
-	}
-	if m.cursor > 0 {
+	} else if m.cursor > 0 {
 		m.cursor--
 	}
-	return m, nil
+	return m.afterMove(prev, nil)
 }
 
 func (m model) moveDown() (tea.Model, tea.Cmd) {
+	prev := m.selectedID()
 	if m.onComposer {
 		return m, nil // already the bottom row
 	}
+	var extra tea.Cmd
 	if m.cursor < len(m.sessions)-1 {
 		m.cursor++
-		return m, nil
+	} else {
+		m.onComposer = true
+		extra = m.composer.Focus()
 	}
-	m.onComposer = true
-	return m, m.composer.Focus()
+	return m.afterMove(prev, extra)
+}
+
+// afterMove clears the stale preview and requests a fresh one when the selected
+// session changed, batching any extra command.
+func (m model) afterMove(prevID string, extra tea.Cmd) (tea.Model, tea.Cmd) {
+	if m.selectedID() == prevID {
+		return m, extra
+	}
+	m.previewText, m.previewID = "", ""
+	return m, tea.Batch(extra, m.previewCmd())
 }
 
 // updateComposerKey runs while the prompt box is selected. Enter launches a
@@ -293,6 +403,13 @@ func (m model) updatePickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // (nothing is typed), so no Ctrl-chords are needed; the Ctrl variants are kept
 // as aliases.
 func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Esc clears an applied filter — checked before the empty-list guard so it
+	// still works when the filter currently hides every row (current() == nil).
+	if msg.Type == tea.KeyEsc && m.filter != "" {
+		m.filter = ""
+		m.sessions = filterSessions(m.allSessions, "")
+		return m, nil
+	}
 	s := m.current()
 	if s == nil {
 		return m, nil
@@ -314,10 +431,46 @@ func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.execInteractive("resume", s.ID)
 	case "e":
 		return m.startRename(s)
+	case "/":
+		m.filtering = true
+		m.filterInput.SetValue(m.filter)
+		m.filterInput.CursorEnd()
+		return m, m.filterInput.Focus()
 	case "q":
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// updateFilterKey runs while the filter bar is open: typing refines the filter
+// live, Enter applies and closes, Esc clears and closes, arrows navigate the
+// filtered list.
+func (m model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		m.filtering = false
+		m.filterInput.Blur()
+		return m, nil
+	case tea.KeyEsc:
+		m.filtering = false
+		m.filter = ""
+		m.filterInput.Blur()
+		m.filterInput.SetValue("")
+		m.sessions = filterSessions(m.allSessions, "")
+		return m, nil
+	case tea.KeyUp:
+		return m.moveUp()
+	case tea.KeyDown:
+		return m.moveDown()
+	}
+	var cmd tea.Cmd
+	m.filterInput, cmd = m.filterInput.Update(msg)
+	m.filter = m.filterInput.Value()
+	m.sessions = filterSessions(m.allSessions, m.filter)
+	if m.cursor >= len(m.sessions) {
+		m.cursor = max(0, len(m.sessions)-1)
+	}
+	return m, cmd
 }
 
 func (m model) startRename(s *session.Session) (tea.Model, tea.Cmd) {
@@ -378,10 +531,15 @@ func (m model) execKillRemove(s *session.Session) tea.Cmd {
 	}
 }
 
-// newSessionArgs builds the `xanax new` argv for the selected harness. "--"
-// stops flag parsing so prompts beginning with "-" are safe.
-func newSessionArgs(harness, prompt string, attach bool) []string {
+// newSessionArgs builds the `xanax new` argv for the selected harness. repo,
+// when set, targets a specific directory (the dashboard's scope); empty lets
+// `xanax new` default to cwd. "--" stops flag parsing so prompts beginning
+// with "-" are safe.
+func newSessionArgs(harness, repo, prompt string, attach bool) []string {
 	args := []string{"new", "--harness", harness}
+	if repo != "" {
+		args = append(args, "--repo", repo)
+	}
 	if !attach {
 		args = append(args, "--no-attach")
 	}
@@ -391,9 +549,9 @@ func newSessionArgs(harness, prompt string, attach bool) []string {
 // execNewBackground launches a new session in the selected harness without
 // attaching, so the user stays on the dashboard.
 func (m model) execNewBackground(prompt string) tea.Cmd {
-	h := m.harness()
+	h, repo := m.harness(), m.deps.Scope
 	return func() tea.Msg {
-		if err := exec.Command(m.deps.SelfPath, newSessionArgs(h, prompt, false)...).Run(); err != nil {
+		if err := exec.Command(m.deps.SelfPath, newSessionArgs(h, repo, prompt, false)...).Run(); err != nil {
 			return actionDoneMsg{status: "launch failed: " + err.Error(), restorePrompt: prompt}
 		}
 		return actionDoneMsg{status: "launched " + h + ": " + truncate(prompt, 40)}
@@ -403,7 +561,7 @@ func (m model) execNewBackground(prompt string) tea.Cmd {
 // execNewAttach launches a new session and drops straight into the harness's
 // live window (its own input, native /command and @file syntax included).
 func (m model) execNewAttach(prompt string) tea.Cmd {
-	c := exec.Command(m.deps.SelfPath, newSessionArgs(m.harness(), prompt, true)...)
+	c := exec.Command(m.deps.SelfPath, newSessionArgs(m.harness(), m.deps.Scope, prompt, true)...)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		if err != nil {
 			return actionDoneMsg{status: "launch failed: " + err.Error(), restorePrompt: prompt}
@@ -439,6 +597,76 @@ func (m model) current() *session.Session {
 		return nil
 	}
 	return m.sessions[m.cursor]
+}
+
+// selectedID is the id of the selected session, or "" when the prompt box (or
+// nothing) is selected.
+func (m model) selectedID() string {
+	if s := m.current(); s != nil {
+		return s.ID
+	}
+	return ""
+}
+
+// reselect re-anchors the selection after the periodic reload rebuilt the list.
+// The cursor is an index into a list that grouped() re-sorts by status then
+// recency, so without re-anchoring a status change (or a newly launched
+// session) can slide a different session under the cursor — making k/enter act
+// on the wrong one. It keeps the previously selected session selected by ID
+// when it survived, otherwise clamps into range. It only falls back to the
+// prompt box when there are genuinely no sessions — not while a filter is
+// narrowing the view, where an empty result is transient and Esc still clears
+// the filter.
+func (m model) reselect(prevID string) (model, tea.Cmd) {
+	if len(m.sessions) > 0 {
+		if i := indexOfID(m.sessions, prevID); i >= 0 {
+			m.cursor = i
+		} else if m.cursor > len(m.sessions)-1 {
+			m.cursor = len(m.sessions) - 1
+		}
+		return m, nil
+	}
+	m.cursor = 0
+	// Fall back to the prompt box only when there are genuinely no sessions at
+	// all. While a filter is merely hiding every row (allSessions non-empty),
+	// stay in the list context so an empty filtered view never traps keystrokes
+	// and Esc still clears the filter.
+	if !m.onComposer && len(m.allSessions) == 0 {
+		m.onComposer = true
+		return m, m.composer.Focus()
+	}
+	return m, nil
+}
+
+// indexOfID returns the index of the session with the given id, or -1.
+func indexOfID(sessions []*session.Session, id string) int {
+	if id == "" {
+		return -1
+	}
+	for i, s := range sessions {
+		if s.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// previewCmd fetches a peek of the selected session's screen (nothing while
+// the prompt box is selected). Runs off the main loop.
+func (m model) previewCmd() tea.Cmd {
+	s := m.current()
+	if s == nil {
+		return nil
+	}
+	id, sock, cols := s.ID, filepath.Join(m.deps.SocketDir, s.ID+".sock"), m.width-4
+	return func() tea.Msg {
+		return previewMsg{id: id, text: attach.Peek(sock, previewRows, cols)}
+	}
+}
+
+type previewMsg struct {
+	id   string
+	text string
 }
 
 func (m model) alive(id string) bool {

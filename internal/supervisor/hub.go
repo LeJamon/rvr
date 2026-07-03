@@ -73,6 +73,7 @@ type hub struct {
 	clients map[*client]struct{}
 	ring    *ringbuf.Ring
 	screen  *screen
+	modes   map[int]bool // sticky DEC modes the harness enabled (mouse, ...)
 	info    wire.Info
 	state   wire.State
 }
@@ -82,18 +83,20 @@ func newHub(ring *ringbuf.Ring, scr *screen, info wire.Info) *hub {
 		clients: make(map[*client]struct{}),
 		ring:    ring,
 		screen:  scr,
+		modes:   make(map[int]bool),
 		info:    info,
 		state:   wire.State{Status: info.Status, Detail: info.Detail},
 	}
 }
 
-// broadcastOutput feeds the screen emulator, records PTY bytes in the ring,
-// and forwards them live.
+// broadcastOutput feeds the screen emulator, records PTY bytes and sticky
+// terminal modes, and forwards the bytes live.
 func (h *hub) broadcastOutput(p []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.screen.write(p)
 	h.ring.Write(p)
+	observeModes(h.modes, p)
 	for _, chunk := range chunkBytes(p, outputChunkSize) {
 		h.fanout(wire.Frame{Type: wire.TypeOutput, Payload: chunk})
 	}
@@ -142,6 +145,9 @@ func (h *hub) register(cl *client, altScreen bool) {
 	if altScreen {
 		primer = h.screen.snapshot()
 	}
+	// Re-enable sticky modes (mouse, bracketed paste, focus) the harness set —
+	// the previous detach reset them on the client's terminal.
+	primer = append(primer, modeSequence(h.modes)...)
 	for _, chunk := range chunkBytes(primer, outputChunkSize) {
 		cl.enqueue(wire.Frame{Type: wire.TypeOutput, Payload: chunk})
 	}
@@ -160,6 +166,15 @@ func (h *hub) clientCount() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.clients)
+}
+
+// preview renders a plain-text preview of the current screen (peek). The VT
+// emulator has its own lock, so this is safe without holding h.mu.
+func (h *hub) preview(maxRows, maxCols int) string {
+	if h.screen == nil {
+		return ""
+	}
+	return h.screen.previewText(maxRows, maxCols)
 }
 
 // fanout must be called with mu held.

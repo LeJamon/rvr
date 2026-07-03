@@ -20,6 +20,7 @@ import (
 
 	"xanax/internal/adapter"
 	"xanax/internal/config"
+	"xanax/internal/notify"
 	"xanax/internal/ringbuf"
 	"xanax/internal/session"
 	"xanax/internal/store"
@@ -41,13 +42,18 @@ type Options struct {
 	Store   *store.Store
 	Logger  *slog.Logger
 	Resume  bool
+	Notify  bool
+	// NotifyFn delivers a desktop notification; nil defaults to notify.Send.
+	// Injectable for tests.
+	NotifyFn func(title, body string)
 }
 
 // Supervisor is a single session's owner process state.
 type Supervisor struct {
-	opts    Options
-	log     *slog.Logger
-	adapter adapter.Adapter
+	opts     Options
+	log      *slog.Logger
+	adapter  adapter.Adapter
+	notifyFn func(title, body string)
 
 	ptmx *os.File
 	cmd  *exec.Cmd
@@ -87,9 +93,13 @@ func Run(opts Options) (int, error) {
 		opts.Logger = slog.Default()
 	}
 	s := &Supervisor{
-		opts:   opts,
-		log:    opts.Logger.With("session", opts.Session.ID),
-		exited: make(chan struct{}),
+		opts:     opts,
+		log:      opts.Logger.With("session", opts.Session.ID),
+		notifyFn: opts.NotifyFn,
+		exited:   make(chan struct{}),
+	}
+	if s.notifyFn == nil {
+		s.notifyFn = func(title, body string) { _ = notify.Send(title, body) }
 	}
 	return s.run()
 }
@@ -264,21 +274,30 @@ func (s *Supervisor) acceptClients() {
 }
 
 func (s *Supervisor) serveClient(cl *client) {
-	go cl.writeLoop()
-
-	// The attach client sends its terminal size immediately on connect. Apply
-	// it BEFORE registering so the screen snapshot is rendered at the client's
-	// size — a snapshot at the wrong width wraps every row and scrolls the
-	// content away. Non-interactive clients that send nothing just hit the
-	// short deadline and get the current-size snapshot.
+	// The first frame is a peek request (one-shot preview, no attach) or the
+	// attach client's terminal size. Read it before starting the write loop so
+	// a peek can reply synchronously and close. Applying the size BEFORE
+	// registering makes the screen snapshot render at the client's width — a
+	// wrong-width snapshot wraps every row and scrolls content away.
 	cl.conn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
-	if f, err := wire.Read(cl.conn); err == nil {
-		if !s.handleClientFrame(f) {
+	first, firstErr := wire.Read(cl.conn)
+	cl.conn.SetReadDeadline(time.Time{})
+
+	if firstErr == nil && first.Type == wire.TypeSnapshotReq {
+		var r wire.Resize
+		_ = first.DecodeJSON(&r)
+		_ = wire.Write(cl.conn, wire.TypeSnapshot, []byte(s.hub.preview(int(r.Rows), int(r.Cols))))
+		cl.close() // peek is never registered as a client
+		return
+	}
+
+	go cl.writeLoop()
+	if firstErr == nil {
+		if !s.handleClientFrame(first) {
 			cl.close()
 			return
 		}
 	}
-	cl.conn.SetReadDeadline(time.Time{})
 
 	s.hub.register(cl, s.altScreen.Load())
 	defer s.hub.remove(cl)
@@ -336,6 +355,7 @@ func (s *Supervisor) watchState() {
 		return
 	}
 	s.stateInfo.had = true
+	prev := session.StatusRunning
 	for ev := range ch {
 		s.stateInfo.saw = true
 		s.stateInfo.last = ev.Kind
@@ -350,6 +370,8 @@ func (s *Supervisor) watchState() {
 			s.log.Warn("set status failed", "err", err)
 		}
 		s.hub.broadcastState(wire.State{Status: string(status), Detail: detail})
+		s.raiseNotification(prev, status, detail)
+		prev = status
 	}
 }
 
@@ -438,6 +460,9 @@ func (s *Supervisor) finish(status session.Status, exitCode int) {
 	if s.hub != nil {
 		s.hub.broadcastExit(wire.Exit{Status: string(status), ExitCode: exitCode})
 	}
+	// Notify on terminal outcome; running is the implicit "prev" so a terminal
+	// state is always a transition. Cancelled is user-initiated → stays quiet.
+	s.raiseNotification(session.StatusRunning, status, s.opts.Session.StatusDetail)
 	s.log.Info("session ended", "status", status, "exit_code", exitCode)
 }
 

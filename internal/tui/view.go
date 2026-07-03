@@ -19,17 +19,34 @@ func (m model) View() string {
 	b.WriteString("\n\n")
 	b.WriteString(m.renderList())
 	b.WriteString("\n")
+	if p := m.renderPreview(); p != "" {
+		b.WriteString(p)
+		b.WriteString("\n")
+	}
 	switch {
 	case m.renaming:
 		b.WriteString(m.renderRename())
 	case m.picking:
 		b.WriteString(m.renderPicker())
+	case m.filtering:
+		b.WriteString(m.renderFilter())
 	default:
 		b.WriteString(m.renderComposer(m.onComposer))
 	}
 	b.WriteString("\n")
 	b.WriteString(m.footer())
 	return b.String()
+}
+
+// renderPreview shows a peek of the selected session's screen when one is
+// selected and a preview has been fetched.
+func (m model) renderPreview() string {
+	if m.onComposer || m.previewText == "" || m.previewID != m.selectedID() {
+		return ""
+	}
+	label := mutedStyle.Render("Preview  ·  " + m.previewID[:min(8, len(m.previewID))])
+	body := lipgloss.NewStyle().Foreground(colMuted).Render(m.previewText)
+	return label + "\n" + hRules(colMuted, m.width).Render(body)
 }
 
 func (m model) header() string {
@@ -44,7 +61,14 @@ func (m model) header() string {
 	if counts[1] > 0 {
 		summary += mutedStyle.Render(fmt.Sprintf("  ·  %d running", counts[1]))
 	}
-	line := titleStyle.Render("xanax") + "   " + summary
+	line := titleStyle.Render("xanax")
+	if m.deps.Scope != "" {
+		line += mutedStyle.Render(" ▸ " + repoName(m.deps.Scope))
+	}
+	line += "   " + summary
+	if m.filter != "" {
+		line += "   " + branchStyle.Render("filter: "+m.filter)
+	}
 	if m.err != nil {
 		line += "   " + errStyle.Render(m.err.Error())
 	}
@@ -89,12 +113,41 @@ func (m model) renderRow(s *session.Session, selected bool) string {
 		content += mutedStyle.Render("  — " + truncate(s.StatusDetail, 40))
 	}
 
+	// Live git context (branch · #PR), right-aligned against the row edge.
+	content = padRight(content, m.gitSuffix(s.RepoPath), m.width-2)
+
 	if !selected {
 		// Align with the ruled row's interior (padding-left = 1 col).
 		return " " + content
 	}
 	// The selected session gets full-width top+bottom rules in the accent color.
 	return hRules(colAccent, m.width).Render(content)
+}
+
+// gitSuffix renders " branch · #pr" for a repo, or "" when unknown.
+func (m model) gitSuffix(repo string) string {
+	gi := m.gitCache[repo]
+	if gi.branch == "" {
+		return ""
+	}
+	out := branchStyle.Render(" " + gi.branch)
+	if gi.pr != "" {
+		out += mutedStyle.Render(" · ") + prStyle.Render("#"+gi.pr)
+	}
+	return out
+}
+
+// padRight places right at the row's right edge, or drops it when there is no
+// room (both operands may contain ANSI styling, so widths are measured).
+func padRight(left, right string, width int) string {
+	if right == "" {
+		return left
+	}
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		return left
+	}
+	return left + strings.Repeat(" ", gap) + right
 }
 
 // renderComposer draws the always-on prompt block: a label plus the input
@@ -138,6 +191,13 @@ func (m model) renderPicker() string {
 	return label + "\n" + hRules(colAccent, m.width).Render(strings.Join(rows, "\n"))
 }
 
+// renderFilter draws the filter input bar.
+func (m model) renderFilter() string {
+	label := groupStyle.Foreground(colAccent).Render("Filter") +
+		mutedStyle.Render("  ·  title / repo / harness — enter apply, esc clear")
+	return label + "\n" + hRules(colAccent, m.width).Render(m.filterInput.View())
+}
+
 // renderRename draws the in-place rename editor for the selected session.
 func (m model) renderRename() string {
 	label := groupStyle.Foreground(colAccent).Render(
@@ -152,13 +212,15 @@ func (m model) footer() string {
 		hint = "enter save · esc cancel"
 	case m.picking:
 		hint = "↑/↓ move · enter select · esc cancel"
+	case m.filtering:
+		hint = "type to filter · enter apply · esc clear"
 	case m.onComposer:
 		hint = "enter launch · ^o launch+attach · ↑ sessions · ^c quit"
 		if len(m.harnesses) > 1 {
 			hint = "enter launch · ^o launch+attach · tab harness · ↑ sessions · ^c quit"
 		}
 	default:
-		hint = "↑/↓ select · →/enter open · e rename · r resume · k remove · ↓ to prompt · ^c quit"
+		hint = "↑/↓ select · →/enter open · e rename · r resume · k remove · / filter · ^c quit"
 	}
 	out := footerStyle.Render(hint)
 	if m.status != "" {
