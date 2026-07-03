@@ -133,7 +133,7 @@ func DefaultTheme() Theme {
 		Completed: "10",  // green
 		Failed:    "9",   // red
 		Cancelled: "8",   // grey
-		Muted:     "244", // dim grey
+		Muted:     "250", // light grey
 		Text:      "15",  // white
 		Branch:    "6",   // cyan
 		PR:        "10",  // green
