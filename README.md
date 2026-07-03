@@ -89,7 +89,7 @@ command = "pi"
 # Any omitted field keeps its default; see `xanax config` for the full set.
 [theme]
 accent    = "13"   # selection / cursor
-muted     = "244"  # secondary text and rules
+muted     = "250"  # secondary text and rules
 branch    = "6"    # git branch on rows
 
 # Any other PTY CLI works via the generic adapter:

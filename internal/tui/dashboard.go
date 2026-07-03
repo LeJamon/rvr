@@ -115,21 +115,7 @@ type actionDoneMsg struct {
 func Run(deps Deps) error {
 	applyTheme(deps.Cfg.Theme) // rebuild styles from the configured theme
 
-	ta := textarea.New()
-	ta.Placeholder = "Paste a prompt and press Enter to launch a new session…"
-	ta.ShowLineNumbers = false
-	ta.Prompt = ""
-	ta.SetHeight(1) // starts one line, auto-grows with content (syncComposerHeight)
-	ta.CharLimit = 0
-	// White text, and no current-line highlight. The cursor line is styled by
-	// CursorLine (not Text), so it must carry the white foreground too —
-	// otherwise a blank CursorLine drops the color on the line being typed.
-	white := lipgloss.NewStyle().Foreground(colWhite)
-	ta.FocusedStyle.Text = white
-	ta.FocusedStyle.CursorLine = white
-	ta.BlurredStyle.Text = white
-	ta.BlurredStyle.CursorLine = white
-	ta.Focus()
+	ta := newComposer()
 
 	ri := textinput.New()
 	ri.Prompt = ""
@@ -153,6 +139,35 @@ func Run(deps Deps) error {
 	}
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
+}
+
+// newComposer builds the prompt textarea: white input text with no line
+// numbers, starting one line tall and auto-growing (syncComposerHeight), and a
+// placeholder rendered in the theme's muted shade. Reads the package-level
+// colors, so callers must have applied the theme (init seeds the defaults).
+func newComposer() textarea.Model {
+	ta := textarea.New()
+	ta.Placeholder = "Paste a prompt and press Enter to launch a new session…"
+	ta.ShowLineNumbers = false
+	ta.Prompt = ""
+	ta.SetHeight(1) // starts one line, auto-grows with content (syncComposerHeight)
+	ta.CharLimit = 0
+	// White text, and no current-line highlight. The cursor line is styled by
+	// CursorLine (not Text), so it must carry the white foreground too —
+	// otherwise a blank CursorLine drops the color on the line being typed.
+	white := lipgloss.NewStyle().Foreground(colWhite)
+	ta.FocusedStyle.Text = white
+	ta.FocusedStyle.CursorLine = white
+	ta.BlurredStyle.Text = white
+	ta.BlurredStyle.CursorLine = white
+	// Placeholder in the theme's muted shade. Bubbles defaults it to a dark
+	// grey (240) that's hard to read; tracking colMuted keeps it the same light
+	// grey as the other hint text so it stays legible.
+	placeholder := lipgloss.NewStyle().Foreground(colMuted)
+	ta.FocusedStyle.Placeholder = placeholder
+	ta.BlurredStyle.Placeholder = placeholder
+	ta.Focus()
+	return ta
 }
 
 // headerPath resolves the location shown in the header: the dashboard's scope,

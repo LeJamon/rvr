@@ -333,7 +333,7 @@ interact_exit_key = "ctrl+\\"    # step out of raw passthrough back to navigate 
 # failed, cancelled, muted, text, branch, pr.
 [theme]
 accent = "13"
-muted  = "244"
+muted  = "250"
 branch = "6"
 
 [harness.opencode]
