@@ -14,30 +14,37 @@ func (m model) View() string {
 	if m.width == 0 {
 		return "loading…"
 	}
-	var b strings.Builder
-	b.WriteString(m.header())
-	b.WriteString("\n\n")
-	b.WriteString(m.renderList())
-	b.WriteString("\n")
+	top := m.header() + "\n\n" + m.renderList()
 	if p := m.renderPreview(); p != "" {
-		b.WriteString(p)
-		b.WriteString("\n")
+		top += "\n" + p
 	}
+	bottom := m.inputBlock() + "\n" + m.footer()
+
+	// Pin the prompt box and footer to the bottom of the screen, filling the gap
+	// between the session list and the input so a short list doesn't leave the
+	// composer floating mid-screen. When content is taller than the terminal the
+	// gap collapses to a single blank line and the top scrolls off, keeping the
+	// prompt in view.
+	gap := max(1, m.height-lipgloss.Height(top)-lipgloss.Height(bottom)+1)
+	return top + strings.Repeat("\n", gap) + bottom
+}
+
+// inputBlock renders whichever editor occupies the bottom prompt slot: the
+// always-present composer, or a modal editor (rename, harness form/picker,
+// filter) when one is open.
+func (m model) inputBlock() string {
 	switch {
 	case m.renaming:
-		b.WriteString(m.renderRename())
+		return m.renderRename()
 	case m.addingHarness:
-		b.WriteString(m.renderHarnessForm())
+		return m.renderHarnessForm()
 	case m.picking:
-		b.WriteString(m.renderPicker())
+		return m.renderPicker()
 	case m.filtering:
-		b.WriteString(m.renderFilter())
+		return m.renderFilter()
 	default:
-		b.WriteString(m.renderComposer(m.onComposer))
+		return m.renderComposer(m.onComposer)
 	}
-	b.WriteString("\n")
-	b.WriteString(m.footer())
-	return b.String()
 }
 
 // renderPreview shows a peek of the selected session's screen when one is
@@ -51,30 +58,50 @@ func (m model) renderPreview() string {
 	return label + "\n" + hRules(colMuted, m.width).Render(body)
 }
 
+// pill is the xanax logo: a small rounded capsule ("pink pill") whose three
+// rows sit to the left of the three-line title/path/counts block, mirroring the
+// masthead layout. Colored with the accent (pink/magenta by default).
+const pill = "▟█████▙\n" +
+	"███████\n" +
+	"▜█████▛"
+
 func (m model) header() string {
-	counts := map[int]int{}
-	for _, s := range m.sessions {
-		counts[groupRank(s.Status)]++
+	logo := lipgloss.NewStyle().Foreground(colAccent).Render(pill)
+
+	title := titleStyle.Render("xanax")
+	if m.deps.Version != "" {
+		title += mutedStyle.Render(" v" + m.deps.Version)
 	}
-	summary := fmt.Sprintf("%d sessions", len(m.sessions))
-	if counts[0] > 0 {
-		summary += mutedStyle.Render(fmt.Sprintf("  ·  %d awaiting input", counts[0]))
-	}
-	if counts[1] > 0 {
-		summary += mutedStyle.Render(fmt.Sprintf("  ·  %d running", counts[1]))
-	}
-	line := titleStyle.Render("xanax")
-	if m.deps.Scope != "" {
-		line += mutedStyle.Render(" ▸ " + repoName(m.deps.Scope))
-	}
-	line += "   " + summary
+
+	counts := m.counts()
 	if m.filter != "" {
-		line += "   " + branchStyle.Render("filter: "+m.filter)
+		counts += "   " + branchStyle.Render("filter: "+m.filter)
 	}
 	if m.err != nil {
-		line += "   " + errStyle.Render(m.err.Error())
+		counts += "   " + errStyle.Render(m.err.Error())
 	}
-	return line
+
+	text := title + "\n" + mutedStyle.Render(m.path) + "\n" + counts
+	return lipgloss.JoinHorizontal(lipgloss.Top, logo, "   ", text)
+}
+
+// counts renders the three session tallies — awaiting input, working, and
+// completed — always shown (even at zero) with each number in its status color.
+func (m model) counts() string {
+	var c [3]int
+	for _, s := range m.sessions {
+		if r := groupRank(s.Status); r < len(c) {
+			c[r]++
+		}
+	}
+	seg := func(n int, col lipgloss.Color, label string) string {
+		return lipgloss.NewStyle().Foreground(col).Render(fmt.Sprintf("%d", n)) +
+			mutedStyle.Render(" "+label)
+	}
+	dot := mutedStyle.Render("  ·  ")
+	return seg(c[0], colWaiting, "awaiting input") + dot +
+		seg(c[1], colRunning, "working") + dot +
+		seg(c[2], colCompleted, "completed")
 }
 
 func (m model) renderList() string {
