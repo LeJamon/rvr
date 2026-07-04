@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -52,6 +53,10 @@ type model struct {
 	harnessIdx int
 	picking    bool // harness picker is open
 	pickIdx    int  // highlighted row in the picker
+	searchInput   textinput.Model // search input in the harness picker
+	searchFocused bool           // search input currently has keyboard focus
+	search      string            // current search filter text
+	pickScroll  int            // scroll offset within filtered list
 
 	allSessions []*session.Session // full scoped list
 	sessions    []*session.Session // filtered display list (grouped)
@@ -127,15 +132,23 @@ func Run(deps Deps) error {
 	fi.CharLimit = 80
 	fi.TextStyle = lipgloss.NewStyle().Foreground(colWhite)
 
+	si := textinput.New()
+	si.Prompt = ""
+	si.Placeholder = "search..."
+	si.CharLimit = 80
+	si.TextStyle = lipgloss.NewStyle().Foreground(colWhite)
+
 	m := model{
-		deps:        deps,
-		composer:    ta,
-		renameInput: ri,
-		filterInput: fi,
-		formInputs:  newFormInputs(),
-		onComposer:  true,
-		harnesses:   harnessNames(deps.Cfg),
-		path:        headerPath(deps.Scope),
+		deps:          deps,
+		composer:      ta,
+		renameInput:   ri,
+		filterInput:   fi,
+		formInputs:    newFormInputs(),
+		onComposer:    true,
+		harnesses:     harnessNames(deps.Cfg),
+		path:          headerPath(deps.Scope),
+		searchInput:   si,
+		searchFocused: false,
 	}
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
@@ -438,6 +451,9 @@ func (m model) updateComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// only way to reach the '+' add-harness form.
 		m.picking = true
 		m.pickIdx = m.harnessIdx
+		m.search = ""
+		m.pickScroll = 0
+		m.searchFocused = false
 		m.composer.Blur()
 		return m, nil
 	case msg.Type == tea.KeyCtrlO, msg.Type == tea.KeyEnter && msg.Alt:
@@ -482,30 +498,154 @@ func (m *model) syncComposerHeight() {
 	m.composer.SetHeight(min(max(rows, 1), maxRows))
 }
 
-// updatePickKey runs while the harness picker is open: ↑/↓ move, Enter picks,
-// '+' opens the add-harness form, Esc/Tab cancels.
+// updatePickKey runs while the harness picker is open: search input on top,
+// ↑/↓ navigate the filtered list, Enter picks, 'd' sets default, '+' adds,
+// Esc/Tab cancels.
 func (m model) updatePickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// '+' always opens the add-harness form, even when the search bar is focused.
 	if msg.Type == tea.KeyRunes && string(msg.Runes) == "+" {
 		return m.startAddHarness()
 	}
+	// When the search input is NOT focused: 'd' sets default; any other letter
+	// focuses the search bar.
+	if !m.searchFocused && msg.Type == tea.KeyRunes {
+		if string(msg.Runes) == "d" {
+			return m.setDefaultHarness()
+		}
+		r := string(msg.Runes)
+		if len(r) == 1 && (r[0] >= 'a' && r[0] <= 'z' || r[0] >= 'A' && r[0] <= 'Z' || r[0] >= '0' && r[0] <= '9' || r[0] == '-' || r[0] == '_') {
+			m.searchInput.SetValue(r)
+			m.search = r
+			m.pickIdx = 0
+			m.pickScroll = 0
+			m.searchFocused = true
+			return m, m.searchInput.Focus()
+		}
+		// Other rune keys are ignored in the list.
+		return m, nil
+	}
+	// When the search input has focus, delegate keys to it.
+	if m.searchFocused {
+		switch msg.Type {
+		case tea.KeyTab:
+			m.searchInput.Blur()
+			m.searchFocused = false
+			return m, nil
+		case tea.KeyEsc:
+			return m.cancelPick()
+		case tea.KeyEnter:
+			// Enter in the search bar selects the highlighted harness.
+			return m.pickHarness()
+		}
+		var cmd tea.Cmd
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		m.search = m.searchInput.Value()
+		m.clampPickIdx()
+		return m, cmd
+	}
+	filtered := m.filteredHarnesses()
 	switch msg.Type {
 	case tea.KeyUp:
 		if m.pickIdx > 0 {
 			m.pickIdx--
+			if m.pickIdx < m.pickScroll {
+				m.pickScroll--
+			}
 		}
 	case tea.KeyDown:
-		if m.pickIdx < len(m.harnesses)-1 {
+		if m.pickIdx < len(filtered)-1 {
 			m.pickIdx++
+			if m.pickIdx >= m.pickScroll+m.visibleRows() {
+				m.pickScroll++
+			}
 		}
 	case tea.KeyEnter:
-		m.harnessIdx = m.pickIdx
-		m.picking = false
-		return m, m.composer.Focus()
+		return m.pickHarness()
 	case tea.KeyEsc, tea.KeyTab:
-		m.picking = false
-		return m, m.composer.Focus()
+		return m.cancelPick()
 	}
 	return m, nil
+}
+
+// filteredHarnesses returns harness names matching the search text,
+// case-insensitive substring match on the name.
+func (m model) filteredHarnesses() []string {
+	if m.search == "" {
+		return m.harnesses
+	}
+	q := strings.ToLower(m.search)
+	var out []string
+	for _, name := range m.harnesses {
+		if strings.Contains(strings.ToLower(name), q) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// visibleRows returns the number of harness rows that fit in the list area,
+// clamped between 5 and 12 based on terminal height.
+func (m model) visibleRows() int {
+	h := min(16, max(8, m.height/3))
+	return max(5, h-4)
+}
+
+// clampPickIdx ensures pickIdx is within the filtered range and resets scroll.
+func (m *model) clampPickIdx() {
+	filtered := m.filteredHarnesses()
+	if len(filtered) == 0 {
+		return
+	}
+	if m.pickIdx >= len(filtered) {
+		m.pickIdx = len(filtered) - 1
+	}
+	if m.pickIdx < 0 {
+		m.pickIdx = 0
+	}
+	m.pickScroll = 0
+}
+
+// pickHarness selects the highlighted harness and closes the picker.
+func (m model) pickHarness() (tea.Model, tea.Cmd) {
+	filtered := m.filteredHarnesses()
+	if len(filtered) == 0 {
+		m.picking = false
+		m.searchFocused = false
+		return m, m.composer.Focus()
+	}
+	name := filtered[m.pickIdx]
+	m.harnessIdx = slices.Index(m.harnesses, name)
+	m.picking = false
+	m.searchFocused = false
+	return m, m.composer.Focus()
+}
+
+// cancelPick closes the picker without selecting.
+func (m model) cancelPick() (tea.Model, tea.Cmd) {
+	m.picking = false
+	m.searchFocused = false
+	return m, m.composer.Focus()
+}
+
+// setDefaultHarness sets the highlighted harness as the default, writes to
+// the config file, and closes the picker.
+func (m model) setDefaultHarness() (tea.Model, tea.Cmd) {
+	filtered := m.filteredHarnesses()
+	if len(filtered) == 0 {
+		return m.cancelPick()
+	}
+	name := filtered[m.pickIdx]
+	m.deps.Cfg.DefaultHarness = name
+	// Also select the harness (same as pressing enter).
+	m.harnessIdx = slices.Index(m.harnesses, name)
+	m.picking = false
+	m.searchFocused = false
+	if err := setDefaultInConfig(m.deps.ConfigPath, name); err != nil {
+		m.status = "set default failed: " + err.Error()
+		return m, m.composer.Focus()
+	}
+	m.status = "set " + name + " as default"
+	return m, m.composer.Focus()
 }
 
 // updateSessionKey runs while a session is selected. Plain letters act on it

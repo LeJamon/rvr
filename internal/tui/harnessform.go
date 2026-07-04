@@ -236,3 +236,34 @@ func restoreConfig(path string, orig []byte, origErr error) {
 	}
 	_ = os.WriteFile(path, orig, 0o600)
 }
+
+// setDefaultInConfig writes default_harness = "name" to the config file.
+// If a default_harness line already exists, it replaces it. Otherwise, it
+// prepends one at the top of the file.
+func setDefaultInConfig(path string, name string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	var out []string
+	found := false
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "default_harness") {
+			found = true
+			// Replace the old default_harness line.
+			out = append(out, fmt.Sprintf("default_harness = %q", name))
+			continue
+		}
+		out = append(out, line)
+	}
+	// If no line was replaced (not found), prepend at the top.
+	if !found {
+		out = append([]string{fmt.Sprintf("default_harness = %q", name)}, out...)
+	}
+	return os.WriteFile(path, []byte(strings.Join(out, "\n")), 0o600)
+}
+

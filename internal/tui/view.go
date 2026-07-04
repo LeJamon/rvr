@@ -248,25 +248,61 @@ func (m model) renderHarnessForm() string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// renderPicker draws the harness selector in the composer's slot: one row per
-// configured harness, ↑/↓ to move, enter to pick, + to add a new one.
+// renderPicker draws the harness picker modal: title, search bar, and a
+// scrollable list of harnesses.  The search bar is at the top; arrows
+// navigate the filtered list.
 func (m model) renderPicker() string {
-	label := groupStyle.Foreground(colAccent).Render("Select harness") +
-		mutedStyle.Render("  ·  ↑/↓ move, enter select, + add, esc cancel")
+	label := groupStyle.Foreground(colAccent).Render("Switch harness") +
+		mutedStyle.Render("  ·  type to search, d set default · ↑/↓ · enter · esc")
+	var b strings.Builder
+	b.WriteString(label)
+	b.WriteString("\n")
+	// Search bar (framed).
+	search := hRules(colAccent, m.width)
+	b.WriteString(search.Render(m.searchInput.View()))
+	// Harness list.
+	filtered := m.filteredHarnesses()
+	visible := m.visibleRows()
+	start := m.pickScroll
+	if start > len(filtered)-visible {
+		start = max(0, len(filtered)-visible)
+	}
+	end := min(start+visible, len(filtered))
 	var rows []string
-	for i, name := range m.harnesses {
+	for i := start; i < end; i++ {
+		name := filtered[i]
 		adapter := m.deps.Cfg.Harnesses[name].Adapter
 		line := "  " + name
-		if i == m.pickIdx {
+		local := i - start
+		if local == m.pickIdx {
 			line = cursorStyle.Render("▸ ") + selectStyle.Render(name)
 		}
-		if i == m.harnessIdx {
-			line += mutedStyle.Render("  (current)")
+		// Show (current) for the harness the next session uses.
+		currentName := m.harnesses[m.harnessIdx]
+		if name == currentName {
+			line += mutedStyle.Render("  · " + adapter + "  (current)")
+		} else if name == m.deps.Cfg.DefaultHarness {
+			line += mutedStyle.Render("  · " + adapter + "  (default)")
+		} else {
+			line += mutedStyle.Render("  · " + adapter)
 		}
-		line += mutedStyle.Render("  · " + adapter)
 		rows = append(rows, line)
 	}
-	return label + "\n" + hRules(colAccent, m.width).Render(strings.Join(rows, "\n"))
+	list := hRules(colAccent, m.width)
+	b.WriteString(list.Render(strings.Join(rows, "\n")))
+	// Hint.
+	var hint string
+	if len(filtered) > 0 {
+		hint = "  enter to select · "
+		if len(filtered) >= visible {
+			hint += "↑↓ scroll · "
+		}
+		hint += "d set default · + add · esc cancel"
+	} else {
+		hint = "  no matching harness · esc cancel"
+	}
+	b.WriteString(hint)
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // renderFilter draws the filter input bar.
@@ -295,7 +331,7 @@ func (m model) footer() string {
 	case m.renaming:
 		hint = "enter save · esc cancel"
 	case m.picking:
-		hint = "↑/↓ move · enter select · + add · esc cancel"
+		hint = "type to search · d set default · ↑/↓ · enter · esc"
 	case m.filtering:
 		hint = "type to filter · enter apply · esc clear"
 	case m.onComposer:
