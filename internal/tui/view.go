@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -15,16 +16,37 @@ func (m model) pickerModalHeight() int {
 	return min(18, max(10, m.height/3))
 }
 
+// modalStyle renders the modal centered in a terminal of the given width.
+// The modal itself scales to ~65% of the terminal (40–80 cols).
+func modalStyle(termWidth, modalWidth int) lipgloss.Style {
+	// Total modal width = modalWidth inner content + 4 (borders) + 4 (inner padding)
+	// Center padding = (termWidth - totalModalWidth) / 2
+	centerPad := (termWidth - modalWidth - 8) / 2
+	if centerPad < 0 {
+		centerPad = 0
+	}
+	return lipgloss.NewStyle().
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(colAccent).
+		Background(lipgloss.Color("09090b")).
+		Padding(1, centerPad+2).
+		Width(termWidth)
+}
+
+// pickerModalWidth returns the modal width as a fraction of the terminal.
+func pickerModalWidth(termWidth int) int {
+	w := int(float64(termWidth) * 0.65)
+	return int(math.Max(40, math.Min(float64(w), 80)))
+}
+
 // renderPickerCentered renders the picker modal with centered layout.
 func (m model) renderPickerCentered() string {
-	label := groupStyle.Foreground(colAccent).Render("Switch harness") +
-		mutedStyle.Render("  ·  type to search, d set default · ↑/↓ · enter · esc")
+	label := groupStyle.Foreground(colAccent).Render("Switch harness")
 	var b strings.Builder
 	b.WriteString(label)
 	b.WriteString("\n")
-	// Search bar (framed).
-	search := hRules(colAccent, m.width)
-	b.WriteString(search.Render(m.searchInput.View()))
+	// Search bar.
+	b.WriteString("\n" + m.searchInput.View())
 	// Harness list.
 	filtered := m.filteredHarnesses()
 	visible := m.pickerModalHeight() - 4 // minus title, search, separator, hint
@@ -56,8 +78,7 @@ func (m model) renderPickerCentered() string {
 		}
 		rows = append(rows, line)
 	}
-	list := hRules(colAccent, m.width)
-	b.WriteString(list.Render(strings.Join(rows, "\n")))
+	b.WriteString(strings.Join(rows, "\n"))
 	// Hint.
 	var hint string
 	if len(filtered) > 0 {
@@ -110,7 +131,7 @@ func (m model) renderCenteredPicker(top string) string {
 	if gap > 0 {
 		b.WriteString(strings.Repeat("\n", gap))
 	}
-	b.WriteString(m.renderPickerCentered())
+	b.WriteString(modalStyle(m.width, pickerModalWidth(m.width)).Render(m.renderPickerCentered()))
 	b.WriteString("\n\n")
 	b.WriteString(footer)
 	return strings.TrimRight(b.String(), "\n")
@@ -126,7 +147,7 @@ func (m model) inputBlock() string {
 	case m.addingHarness:
 		return m.renderHarnessForm()
 	case m.picking:
-		return m.renderPicker()
+		return modalStyle(m.width, pickerModalWidth(m.width)).Render(m.renderPicker())
 	case m.filtering:
 		return m.renderFilter()
 	default:
@@ -332,14 +353,12 @@ func (m model) renderHarnessForm() string {
 // scrollable list of harnesses.  The search bar is at the top; arrows
 // navigate the filtered list.
 func (m model) renderPicker() string {
-	label := groupStyle.Foreground(colAccent).Render("Switch harness") +
-		mutedStyle.Render("  ·  type to search, d set default · ↑/↓ · enter · esc")
+	label := groupStyle.Foreground(colAccent).Render("Switch harness")
 	var b strings.Builder
 	b.WriteString(label)
 	b.WriteString("\n")
-	// Search bar (framed).
-	search := hRules(colAccent, m.width)
-	b.WriteString(search.Render(m.searchInput.View()))
+	// Search bar.
+	b.WriteString("\n" + m.searchInput.View())
 	// Harness list.
 	filtered := m.filteredHarnesses()
 	visible := m.visibleRows()
@@ -368,8 +387,7 @@ func (m model) renderPicker() string {
 		}
 		rows = append(rows, line)
 	}
-	list := hRules(colAccent, m.width)
-	b.WriteString(list.Render(strings.Join(rows, "\n")))
+	b.WriteString(strings.Join(rows, "\n"))
 	// Hint.
 	var hint string
 	if len(filtered) > 0 {
