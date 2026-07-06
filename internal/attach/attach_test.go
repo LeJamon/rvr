@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -16,35 +15,45 @@ import (
 // mode-reset sequence when the attachment ends, so harness-enabled modes
 // (Kitty keyboard, mouse, ...) don't leak into whatever runs next.
 func TestRunResetsTerminalModesOnDetach(t *testing.T) {
-	sockDir, err := os.MkdirTemp("/tmp", "xnxat")
-	if err != nil {
-		t.Fatal(err)
+	out, res := runAttachTest(t)
+	if res != Detached {
+		t.Fatalf("Run returned %v, want Detached", res)
 	}
-	defer os.RemoveAll(sockDir)
-	sock := filepath.Join(sockDir, "s.sock")
 
-	// Fake supervisor: accept, greet, then echo nothing and wait.
-	l, err := net.Listen("unix", sock)
-	if err != nil {
-		t.Fatal(err)
+	if !bytes.Contains(out, resetModes) {
+		t.Errorf("terminal reset sequence not written on detach; got %q", out)
 	}
-	defer l.Close()
+}
+
+// TestRunStartsOnCleanSessionScreen verifies a new attachment clears away the
+// previous terminal contents before any supervisor output arrives.
+func TestRunStartsOnCleanSessionScreen(t *testing.T) {
+	out, res := runAttachTest(t)
+	if res != Detached {
+		t.Fatalf("Run returned %v, want Detached", res)
+	}
+	if !bytes.HasPrefix(out, enterSessionScreen) {
+		t.Fatalf("attach did not start with clean session screen; got %q", out)
+	}
+	if !bytes.Contains(out, []byte("\x1b[?1049h")) || !bytes.Contains(out, []byte("\x1b[2J")) {
+		t.Errorf("clean screen primer is missing alternate-screen or clear-screen; got %q", out)
+	}
+}
+
+func runAttachTest(t *testing.T) ([]byte, Result) {
+	t.Helper()
+
+	client, server := net.Pipe()
 	go func() {
-		conn, err := l.Accept()
-		if err != nil {
-			return
-		}
-		defer conn.Close()
-		wire.WriteJSON(conn, wire.TypeHello, wire.Info{SessionID: "x"})
-		// Drain client frames until it disconnects.
+		defer server.Close()
+		wire.WriteJSON(server, wire.TypeHello, wire.Info{SessionID: "x"})
 		for {
-			if _, err := wire.Read(conn); err != nil {
+			if _, err := wire.Read(server); err != nil {
 				return
 			}
 		}
 	}()
 
-	// Pipes stand in for the terminal (not a TTY: raw-mode is a no-op).
 	inR, inW, _ := os.Pipe()
 	outR, outW, _ := os.Pipe()
 	defer outR.Close()
@@ -65,28 +74,22 @@ func TestRunResetsTerminalModesOnDetach(t *testing.T) {
 
 	resCh := make(chan Result, 1)
 	go func() {
-		res, _ := Run(Options{SocketPath: sock, In: inR, Out: outW})
-		outW.Close() // let the collector finish
+		res, _ := runConnected(Options{In: inR, Out: outW}, client)
+		outW.Close()
 		resCh <- res
 	}()
 
 	time.Sleep(200 * time.Millisecond)
 	inW.Write([]byte{0x1c}) // ctrl+\ -> detach
 
+	var res Result
 	select {
-	case res := <-resCh:
-		if res != Detached {
-			t.Fatalf("Run returned %v, want Detached", res)
-		}
+	case res = <-resCh:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not return after detach")
 	}
 	inW.Close()
-
-	out := <-got
-	if !bytes.Contains(out, resetModes) {
-		t.Errorf("terminal reset sequence not written on detach; got %q", out)
-	}
+	return <-got, res
 }
 
 // TestResetModesDisablesHarnessInputModes guards that every mouse/paste/focus
