@@ -39,6 +39,14 @@ var resetModes = []byte("" +
 	"\x1b[?1049l" + // leave the alternate screen
 	"\x1b[0m\x1b[?25h") // reset attributes, show cursor
 
+// enterSessionScreen gives each attach a private, blank screen before any
+// replay or live output arrives. Without this, a slow-starting or line-based
+// session can leave visible pixels from the dashboard or a previous session.
+//
+// Leave cursor visibility alone here: full-screen snapshots manage it while
+// painting, and line-based sessions may not replay a later cursor-show sequence.
+var enterSessionScreen = []byte("\x1b[?1049h\x1b[0m\x1b[2J\x1b[H")
+
 // Result explains why Run returned.
 type Result int
 
@@ -59,6 +67,15 @@ type Options struct {
 // Run connects, puts the terminal in raw mode, and proxies until the user
 // detaches or the session ends.
 func Run(opts Options) (Result, error) {
+	conn, err := net.Dial("unix", opts.SocketPath)
+	if err != nil {
+		return Disconnected, fmt.Errorf("connect to session: %w", err)
+	}
+	return runConnected(opts, conn)
+}
+
+func runConnected(opts Options, conn net.Conn) (Result, error) {
+	defer conn.Close()
 	if opts.In == nil {
 		opts.In = os.Stdin
 	}
@@ -68,12 +85,6 @@ func Run(opts Options) (Result, error) {
 	if opts.ExitKey == 0 {
 		opts.ExitKey = 0x1c
 	}
-
-	conn, err := net.Dial("unix", opts.SocketPath)
-	if err != nil {
-		return Disconnected, fmt.Errorf("connect to session: %w", err)
-	}
-	defer conn.Close()
 
 	restore, err := makeRaw(opts.In)
 	if err != nil {
@@ -88,6 +99,7 @@ func Run(opts Options) (Result, error) {
 	// dashboard cannot recognize — quit appears broken.) This is what tmux does
 	// to the client terminal on detach.
 	defer opts.Out.Write(resetModes)
+	opts.Out.Write(enterSessionScreen)
 
 	sendResize(conn, opts.Out)
 	stopWinch := watchWinch(conn, opts.Out)
