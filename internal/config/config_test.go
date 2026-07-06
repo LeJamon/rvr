@@ -40,6 +40,19 @@ func TestLoadDefaultsWhenFileMissing(t *testing.T) {
 	if got := cfg.Harnesses["pi"].Adapter; got != config.AdapterPi {
 		t.Errorf("pi adapter = %q, want %q", got, config.AdapterPi)
 	}
+	codex := cfg.Harnesses["codex"]
+	if codex.Adapter != config.AdapterGeneric || codex.Command != "codex" {
+		t.Errorf("codex default = %+v, want generic codex", codex)
+	}
+	if !codex.PromptPositional {
+		t.Error("codex default prompt_positional = false, want true")
+	}
+	if !slices.Equal(codex.ResumeArgs, []string{"resume", "--last"}) {
+		t.Errorf("codex default resume_args = %v, want [resume --last]", codex.ResumeArgs)
+	}
+	if codex.IdleTimeout != 120 {
+		t.Errorf("codex default idle_timeout = %d, want 120", codex.IdleTimeout)
+	}
 }
 
 func TestLoadMergesFileOverDefaults(t *testing.T) {
@@ -89,9 +102,64 @@ resume_args = ["session", "--resume"]
 	}
 }
 
+func TestLoadMergesPartialCodexConfigOverDefault(t *testing.T) {
+	path := writeConfig(t, `
+default_harness = "codex"
+
+[harness.codex]
+adapter = "generic"
+command = "codex"
+args = ["-a", "never", "-s", "workspace-write"]
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	codex := cfg.Harnesses["codex"]
+	if cfg.DefaultHarness != "codex" {
+		t.Errorf("DefaultHarness = %q, want codex", cfg.DefaultHarness)
+	}
+	if !slices.Equal(codex.Args, []string{"-a", "never", "-s", "workspace-write"}) {
+		t.Errorf("codex args = %v, want local override", codex.Args)
+	}
+	if !codex.PromptPositional {
+		t.Error("partial codex override dropped prompt_positional")
+	}
+	if !slices.Equal(codex.ResumeArgs, []string{"resume", "--last"}) {
+		t.Errorf("partial codex override dropped resume_args: %v", codex.ResumeArgs)
+	}
+	if codex.IdleTimeout != 120 {
+		t.Errorf("partial codex override dropped idle_timeout: %d", codex.IdleTimeout)
+	}
+}
+
+func TestLoadCodexDefaultsCanBeExplicitlyDisabled(t *testing.T) {
+	path := writeConfig(t, `
+[harness.codex]
+prompt_positional = false
+idle_timeout = 0
+`)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	codex := cfg.Harnesses["codex"]
+	if codex.PromptPositional {
+		t.Error("codex prompt_positional = true, want explicit false override")
+	}
+	if codex.IdleTimeout != 0 {
+		t.Errorf("codex idle_timeout = %d, want explicit zero override", codex.IdleTimeout)
+	}
+	if codex.Adapter != config.AdapterGeneric || codex.Command != "codex" {
+		t.Errorf("codex default identity = %+v, want generic codex", codex)
+	}
+	if !slices.Equal(codex.ResumeArgs, []string{"resume", "--last"}) {
+		t.Errorf("codex resume_args = %v, want default resume args preserved", codex.ResumeArgs)
+	}
+}
+
 // TestLoadCodexGenericExample loads the documented codex block (README/SPEC)
-// and asserts it decodes as intended. It also covers prompt_positional and
-// idle_timeout, which no other config test exercises.
+// and asserts it decodes as intended.
 func TestLoadCodexGenericExample(t *testing.T) {
 	path := writeConfig(t, `
 [harness.codex]

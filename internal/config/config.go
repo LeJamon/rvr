@@ -180,8 +180,9 @@ func DefaultPaths() (Paths, error) {
 	}, nil
 }
 
-// Default returns the built-in configuration: opencode and pi with their
-// native adapters, no config file required.
+// Default returns the built-in harness configuration. opencode and pi use
+// native adapters; codex uses the generic adapter with command-line prompt
+// delivery because typing into its full-screen TUI races startup.
 func Default() *Config {
 	return &Config{
 		DefaultHarness:  "opencode",
@@ -193,6 +194,13 @@ func Default() *Config {
 		Harnesses: map[string]Harness{
 			"opencode": {Adapter: AdapterOpencode, Command: "opencode"},
 			"pi":       {Adapter: AdapterPi, Command: "pi"},
+			"codex": {
+				Adapter:          AdapterGeneric,
+				Command:          "codex",
+				ResumeArgs:       []string{"resume", "--last"},
+				PromptPositional: true,
+				IdleTimeout:      120,
+			},
 		},
 	}
 }
@@ -335,13 +343,27 @@ func mergeTheme(base, over Theme) Theme {
 // fileConfig uses pointers so absent keys are distinguishable from zero
 // values when merging over defaults.
 type fileConfig struct {
-	DefaultHarness  *string            `toml:"default_harness"`
-	InteractExitKey *string            `toml:"interact_exit_key"`
-	AutoResume      *bool              `toml:"auto_resume"`
-	Notifications   *bool              `toml:"notifications"`
-	Theme           Theme              `toml:"theme"`
-	Keys            KeyMap             `toml:"keys"`
-	Harness         map[string]Harness `toml:"harness"`
+	DefaultHarness  *string                `toml:"default_harness"`
+	InteractExitKey *string                `toml:"interact_exit_key"`
+	AutoResume      *bool                  `toml:"auto_resume"`
+	Notifications   *bool                  `toml:"notifications"`
+	Theme           Theme                  `toml:"theme"`
+	Keys            KeyMap                 `toml:"keys"`
+	Harness         map[string]fileHarness `toml:"harness"`
+}
+
+type fileHarness struct {
+	Adapter    string            `toml:"adapter"`
+	Command    string            `toml:"command"`
+	Args       []string          `toml:"args,omitempty"`
+	ResumeArgs []string          `toml:"resume_args,omitempty"`
+	Env        map[string]string `toml:"env,omitempty"`
+
+	PromptArg        string `toml:"prompt_arg,omitempty"`
+	PromptPositional *bool  `toml:"prompt_positional,omitempty"`
+
+	IdleTimeout    *int   `toml:"idle_timeout,omitempty"`
+	WaitingPattern string `toml:"waiting_pattern,omitempty"`
 }
 
 // Load reads the config file at path (if it exists) and merges it over the
@@ -398,11 +420,11 @@ func Load(path string) (*Config, error) {
 		if fh.PromptArg != "" {
 			merged.PromptArg = fh.PromptArg
 		}
-		if fh.PromptPositional {
-			merged.PromptPositional = true
+		if fh.PromptPositional != nil {
+			merged.PromptPositional = *fh.PromptPositional
 		}
-		if fh.IdleTimeout != 0 {
-			merged.IdleTimeout = fh.IdleTimeout
+		if fh.IdleTimeout != nil {
+			merged.IdleTimeout = *fh.IdleTimeout
 		}
 		if fh.WaitingPattern != "" {
 			merged.WaitingPattern = fh.WaitingPattern
