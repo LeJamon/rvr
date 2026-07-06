@@ -442,10 +442,14 @@ box shows the same rules in grey when it is not the selected row.
   Only the interact-mode detach key lives elsewhere (`interact_exit_key`), since
   it is read inside the raw passthrough rather than the dashboard.
 - **Keybindings editor** (`s`): a centered, searchable modal — the same style as
-  the harness picker — listing every action with its current keys. `↑`/`↓` move,
-  Enter captures the next keypress as that action's binding and writes it to the
-  `[keys]` table (taking effect immediately), Esc closes. It edits the same file
-  `[keys]` documents, so changes made here and by hand are one and the same.
+  the harness picker — listing every action with its current keys. `↑`/`↓` move and
+  Enter starts a capture for the highlighted action; then press one or more keys
+  (each added once) and Enter again to save them — so you can bind aliases like `k`
+  and `ctrl+k` together — or Esc to cancel. The binding is written to the `[keys]`
+  table and takes effect immediately; Esc in the list closes the editor. It edits
+  the same file `[keys]` documents, so changes made here and by hand are one and the
+  same. Enter, Esc and the quit key drive the capture itself, so binding an action
+  to one of those is a config-file edit.
 - Live updates: the list reloads from SQLite once per second (supervisors are the
   writers). The startup reconciliation pass auto-resumes interrupted sessions (§6)
   before the first render.

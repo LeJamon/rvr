@@ -64,6 +64,7 @@ type model struct {
 	// next keypress as that action's new binding (settingsCapture) and persists it.
 	settingsOn      bool
 	settingsCapture bool
+	settingsPending []string // keys accumulated during a capture, committed on Enter
 	settingsIdx     int
 	settingsScroll  int
 	settingsSearch  string

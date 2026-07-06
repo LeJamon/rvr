@@ -159,13 +159,19 @@ func (m model) renderSettingsModal() string {
 
 	title := "Keybindings"
 	if m.settingsCapture && m.settingsIdx < len(filtered) {
-		title = "Press a key for " + filtered[m.settingsIdx].Name
+		title = "Press keys for " + filtered[m.settingsIdx].Name
 	}
 	results := modalBox(colMuted, w, title, strings.Join(lines, "\n"))
 
 	if m.settingsCapture {
-		hint := "   " + mutedStyle.Render("press the new key  ·  esc to cancel")
-		return results + "\n" + modalBox(colMuted, w, "Rebind", hint)
+		left := cursorStyle.Render(" > ")
+		if len(m.settingsPending) == 0 {
+			left += mutedStyle.Render("press keys…")
+		} else {
+			left += whiteText().Render(strings.Join(m.settingsPending, ", "))
+		}
+		hint := mutedStyle.Render("enter save · esc cancel ")
+		return results + "\n" + modalBox(colMuted, w, "Rebind", padRight(left, hint, w))
 	}
 	prompt := cursorStyle.Render(" > ") + m.settingsInput.View()
 	count := mutedStyle.Render(fmt.Sprintf("%d / %d ", len(filtered), total))
@@ -524,7 +530,7 @@ func (m model) footer() string {
 		hint = fmt.Sprintf("type to filter · %s apply · %s clear", keyHint(k.Confirm), keyHint(k.Cancel))
 	case m.settingsOn:
 		if m.settingsCapture {
-			hint = "press any key to bind it · esc cancel"
+			hint = "press keys to add · enter save · esc cancel"
 		} else {
 			hint = fmt.Sprintf("type to search · %s move · %s rebind · %s close",
 				updown, keyHint(k.Confirm), keyHint(k.Cancel))

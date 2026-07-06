@@ -997,8 +997,9 @@ func TestSettingsKeyOpensEditor(t *testing.T) {
 }
 
 // TestSettingsRebindPersistsAndApplies drives the full editor flow: filter to an
-// action, capture a new key, and confirm it is both written to the config file
-// and live in the model (so keyMatches uses it immediately).
+// action, capture two keys, commit with Enter, and confirm the multi-key binding
+// is both written to the config file and live in the model (so keyMatches uses it
+// immediately).
 func TestSettingsRebindPersistsAndApplies(t *testing.T) {
 	m := selectSession(newTestModel(sampleSessions()), 0)
 	cfgPath := filepath.Join(t.TempDir(), "config.toml")
@@ -1014,26 +1015,53 @@ func TestSettingsRebindPersistsAndApplies(t *testing.T) {
 	if got := m.filteredActions(); len(got) == 0 || got[m.settingsIdx].Name != "remove" {
 		t.Fatalf("search did not highlight the remove action: %v", got)
 	}
-	m = send(m, "enter") // begin capturing a new key
+	m = send(m, "enter") // begin capturing keys
 	if !m.settingsCapture {
 		t.Fatal("enter did not start key capture")
 	}
-	if !strings.Contains(m.View(), "Press a key for remove") {
-		t.Error("capture mode did not prompt for the new key")
+	if !strings.Contains(m.View(), "Press keys for remove") {
+		t.Error("capture mode did not prompt for the new keys")
 	}
-	m = send(m, "x") // bind remove -> x
+	m = send(m, "x")      // accumulate two keys before committing
+	m = send(m, "ctrl+k") //
+	m = send(m, "x")      // a repeat is ignored (deduped)
+	if !slices.Equal(m.settingsPending, []string{"x", "ctrl+k"}) {
+		t.Fatalf("pending keys = %v, want [x ctrl+k] (deduped)", m.settingsPending)
+	}
+	m = send(m, "enter") // commit
 	if m.settingsCapture {
-		t.Fatal("a keypress did not complete the capture")
+		t.Fatal("enter did not complete the capture")
 	}
-	if !slices.Equal(m.deps.Cfg.Keys.Remove, config.Binding{"x"}) {
-		t.Errorf("in-memory remove = %v, want [x] right after rebinding", m.deps.Cfg.Keys.Remove)
+	if !slices.Equal(m.deps.Cfg.Keys.Remove, config.Binding{"x", "ctrl+k"}) {
+		t.Errorf("in-memory remove = %v, want [x ctrl+k] right after rebinding", m.deps.Cfg.Keys.Remove)
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatalf("reload persisted config: %v", err)
 	}
-	if !slices.Equal(cfg.Keys.Remove, config.Binding{"x"}) {
-		t.Errorf("persisted remove = %v, want [x]", cfg.Keys.Remove)
+	if !slices.Equal(cfg.Keys.Remove, config.Binding{"x", "ctrl+k"}) {
+		t.Errorf("persisted remove = %v, want [x ctrl+k]", cfg.Keys.Remove)
+	}
+}
+
+// TestSettingsEmptyCommitIsNoOp confirms committing with no keys captured is a
+// cancel, not an accidental unbind.
+func TestSettingsEmptyCommitIsNoOp(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m.deps.ConfigPath = filepath.Join(t.TempDir(), "config.toml")
+	before := slices.Clone(m.deps.Cfg.Keys.Remove)
+
+	m = send(m, "s")
+	for _, r := range "remove" {
+		m = send(m, string(r))
+	}
+	m = send(m, "enter") // start capture
+	m = send(m, "enter") // commit with nothing captured
+	if m.settingsCapture {
+		t.Error("empty commit left capture active")
+	}
+	if !slices.Equal(m.deps.Cfg.Keys.Remove, before) {
+		t.Errorf("empty commit changed the binding: %v", m.deps.Cfg.Keys.Remove)
 	}
 }
 

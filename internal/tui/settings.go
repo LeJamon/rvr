@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -69,7 +70,8 @@ func (m model) updateSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.filteredActions()) == 0 {
 			return m, nil
 		}
-		m.settingsCapture = true // next key rebinds the highlighted action
+		m.settingsCapture = true // capture keys for the highlighted action
+		m.settingsPending = nil
 		return m, nil
 	case keyMatches(k.Cancel, msg):
 		return m.closeSettings()
@@ -83,31 +85,49 @@ func (m model) updateSettingsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// captureKeyBinding binds the highlighted action to the pressed key and persists
-// it. Esc aborts the capture with no change. Rebinding replaces the action's
-// keys with the single captured key; multi-key aliases stay editable in the file.
-// (The quit key still quits rather than being captured — it is intercepted a
-// level up in updateKey — so binding it must be done in the config file.)
+// captureKeyBinding accumulates the pressed keys into settingsPending. Each key
+// is added once (a repeat is ignored); Enter commits them as the action's new
+// binding, Esc aborts with no change. Enter, Esc and the quit key are the
+// capture's own controls (the quit key is intercepted a level up in updateKey),
+// so binding an action to one of them must be done in the config file.
 func (m model) captureKeyBinding(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.Type == tea.KeyEsc { // reliable abort regardless of the cancel binding
+	switch msg.Type {
+	case tea.KeyEsc: // reliable abort regardless of the cancel binding
 		m.settingsCapture = false
+		m.settingsPending = nil
+		return m, nil
+	case tea.KeyEnter: // commit whatever has been captured so far
+		return m.commitCapture()
+	}
+	key := canonKey(msg.String())
+	if !slices.Contains(m.settingsPending, key) {
+		m.settingsPending = append(m.settingsPending, key)
+	}
+	return m, nil
+}
+
+// commitCapture writes the accumulated keys as the highlighted action's binding
+// and persists them. An empty capture is treated as a cancel so a stray Enter
+// never silently unbinds an action (unbinding stays a deliberate `= []` edit).
+func (m model) commitCapture() (tea.Model, tea.Cmd) {
+	pending := m.settingsPending
+	m.settingsCapture = false
+	m.settingsPending = nil
+	if len(pending) == 0 {
 		return m, nil
 	}
 	filtered := m.filteredActions()
 	if m.settingsIdx >= len(filtered) {
-		m.settingsCapture = false
 		return m, nil
 	}
 	name := filtered[m.settingsIdx].Name
-	newKey := canonKey(msg.String())
-	m.settingsCapture = false
 
 	if m.deps.ConfigPath == "" {
 		m.status = "rebind failed: no config path"
 		return m, nil
 	}
 	orig, origErr := os.ReadFile(m.deps.ConfigPath)
-	if err := setKeyBindingInConfig(m.deps.ConfigPath, name, []string{newKey}); err != nil {
+	if err := setKeyBindingInConfig(m.deps.ConfigPath, name, pending); err != nil {
 		m.status = "rebind failed: " + err.Error()
 		return m, nil
 	}
@@ -118,7 +138,7 @@ func (m model) captureKeyBinding(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.deps.Cfg = cfg // new bindings take effect immediately (keyMatches reads Cfg.Keys)
-	m.status = fmt.Sprintf("bound %s to %s", name, keyLabel(newKey))
+	m.status = fmt.Sprintf("bound %s to %s", name, strings.Join(pending, ", "))
 	return m, nil
 }
 
