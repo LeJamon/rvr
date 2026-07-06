@@ -82,6 +82,15 @@ type Theme struct {
 // the action; an empty list leaves it unbound.
 type Binding []string
 
+// KeyAction pairs a bindable action's config name and one-line description with
+// its current keys. KeyMap.Actions returns them in a stable order for the in-TUI
+// keybindings editor and for validation.
+type KeyAction struct {
+	Name string
+	Desc string
+	Keys Binding
+}
+
 // KeyMap binds the dashboard's actions to keys (SPEC.md §8/§10). Every key the
 // dashboard handles resolves through it, so the config file can remap which key
 // does what. The actions shared across every modal editor — Confirm (the primary
@@ -103,6 +112,7 @@ type KeyMap struct {
 	Rename   Binding `toml:"rename"`    // rename its xanax label
 	Preview  Binding `toml:"preview"`   // toggle the screen peek
 	Filter   Binding `toml:"filter"`    // open the filter bar
+	Settings Binding `toml:"settings"`  // open the in-TUI keybindings editor
 	QuitList Binding `toml:"quit_list"` // quit straight from the list
 
 	// Prompt box (composer).
@@ -204,6 +214,7 @@ func DefaultKeys() KeyMap {
 		Rename:   Binding{"e"},
 		Preview:  Binding{"space"},
 		Filter:   Binding{"/"},
+		Settings: Binding{"s"},
 		QuitList: Binding{"q"},
 
 		LaunchAttach:  Binding{"ctrl+o", "alt+enter"},
@@ -216,6 +227,35 @@ func DefaultKeys() KeyMap {
 
 		FormNext: Binding{"tab", "down"},
 		FormPrev: Binding{"shift+tab", "up"},
+	}
+}
+
+// Actions lists every bindable action with its current keys, in the stable
+// order the in-TUI keybindings editor displays them. Adding a KeyMap field means
+// adding it here too — validate and the editor both enumerate through this.
+func (k KeyMap) Actions() []KeyAction {
+	return []KeyAction{
+		{"up", "move the selection up", k.Up},
+		{"down", "move the selection down", k.Down},
+		{"confirm", "primary action: launch / open / apply / save / select", k.Confirm},
+		{"cancel", "back, cancel, or clear an applied filter", k.Cancel},
+		{"quit", "confirm-then-exit, from any mode", k.Quit},
+		{"open", "open the selected session's window", k.Open},
+		{"remove", "kill (if live) then remove the session", k.Remove},
+		{"resume", "resume the selected session", k.Resume},
+		{"rename", "rename the session's xanax label", k.Rename},
+		{"preview", "toggle the screen peek", k.Preview},
+		{"filter", "filter the session list", k.Filter},
+		{"settings", "open this keybindings editor", k.Settings},
+		{"quit_list", "quit straight from the session list", k.QuitList},
+		{"launch_attach", "launch a new session and attach to it", k.LaunchAttach},
+		{"harness_picker", "open the harness picker", k.HarnessPicker},
+		{"add_harness", "open the add-harness form", k.AddHarness},
+		{"set_default", "set the highlighted harness as default", k.SetDefault},
+		{"modify_harness", "edit the highlighted harness", k.ModifyHarness},
+		{"toggle_search", "toggle the picker's search / action row", k.ToggleSearch},
+		{"form_next", "next form field", k.FormNext},
+		{"form_prev", "previous form field", k.FormPrev},
 	}
 }
 
@@ -241,6 +281,7 @@ func mergeKeys(base, over KeyMap) KeyMap {
 		Rename:        pick(base.Rename, over.Rename),
 		Preview:       pick(base.Preview, over.Preview),
 		Filter:        pick(base.Filter, over.Filter),
+		Settings:      pick(base.Settings, over.Settings),
 		QuitList:      pick(base.QuitList, over.QuitList),
 		LaunchAttach:  pick(base.LaunchAttach, over.LaunchAttach),
 		HarnessPicker: pick(base.HarnessPicker, over.HarnessPicker),
@@ -401,21 +442,10 @@ func (c *Config) validate() error {
 // trips this. Unknown key *names* (e.g. "supr" for a nonexistent key) cannot be
 // validated exhaustively — they simply never fire.
 func (k KeyMap) validate() error {
-	for _, f := range []struct {
-		name string
-		b    Binding
-	}{
-		{"up", k.Up}, {"down", k.Down}, {"confirm", k.Confirm}, {"cancel", k.Cancel},
-		{"quit", k.Quit}, {"open", k.Open}, {"remove", k.Remove}, {"resume", k.Resume},
-		{"rename", k.Rename}, {"preview", k.Preview}, {"filter", k.Filter},
-		{"quit_list", k.QuitList}, {"launch_attach", k.LaunchAttach},
-		{"harness_picker", k.HarnessPicker}, {"add_harness", k.AddHarness},
-		{"set_default", k.SetDefault}, {"modify_harness", k.ModifyHarness},
-		{"toggle_search", k.ToggleSearch}, {"form_next", k.FormNext}, {"form_prev", k.FormPrev},
-	} {
-		for _, key := range f.b {
+	for _, a := range k.Actions() {
+		for _, key := range a.Keys {
 			if strings.TrimSpace(key) == "" {
-				return fmt.Errorf("keys %s: contains an empty key binding", f.name)
+				return fmt.Errorf("keys %s: contains an empty key binding", a.Name)
 			}
 		}
 	}

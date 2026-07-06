@@ -23,18 +23,19 @@ func newTestModel(sessions []*session.Session) model {
 	cfg := config.Default()
 	grp := grouped(sessions)
 	m := model{
-		deps:        Deps{Cfg: cfg, SocketDir: "/tmp/xanax-nonexistent-test"},
-		composer:    textarea.New(),
-		renameInput: textinput.New(),
-		filterInput: textinput.New(),
-		formInputs:  newFormInputs(),
-		onComposer:  true,
-		harnesses:   harnessNames(cfg),
-		searchInput: textinput.New(),
-		width:       120,
-		height:      40,
-		allSessions: grp,
-		sessions:    grp,
+		deps:          Deps{Cfg: cfg, SocketDir: "/tmp/xanax-nonexistent-test"},
+		composer:      textarea.New(),
+		renameInput:   textinput.New(),
+		filterInput:   textinput.New(),
+		formInputs:    newFormInputs(),
+		onComposer:    true,
+		harnesses:     harnessNames(cfg),
+		searchInput:   textinput.New(),
+		settingsInput: textinput.New(),
+		width:         120,
+		height:        40,
+		allSessions:   grp,
+		sessions:      grp,
 	}
 	m.composer.Focus()
 	return m
@@ -979,5 +980,87 @@ func TestFooterReflectsReboundKeys(t *testing.T) {
 	m.deps.Cfg.Keys.Remove = config.Binding{"x"}
 	if foot := m.footer(); !strings.Contains(foot, "x remove") {
 		t.Errorf("footer did not reflect the rebound remove key: %q", foot)
+	}
+}
+
+// TestSettingsKeyOpensEditor confirms 's' (from a selected session) opens the
+// keybindings editor with its search box focused.
+func TestSettingsKeyOpensEditor(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m = send(m, "s")
+	if !m.settingsOn {
+		t.Fatal("'s' did not open the settings editor")
+	}
+	if !strings.Contains(m.View(), "Keybindings") {
+		t.Error("settings modal did not render its Keybindings panel")
+	}
+}
+
+// TestSettingsRebindPersistsAndApplies drives the full editor flow: filter to an
+// action, capture a new key, and confirm it is both written to the config file
+// and live in the model (so keyMatches uses it immediately).
+func TestSettingsRebindPersistsAndApplies(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	m.deps.ConfigPath = cfgPath
+
+	m = send(m, "s") // open the editor
+	if !m.settingsOn {
+		t.Fatal("settings editor did not open")
+	}
+	for _, r := range "remove" { // search narrows to the remove action
+		m = send(m, string(r))
+	}
+	if got := m.filteredActions(); len(got) == 0 || got[m.settingsIdx].Name != "remove" {
+		t.Fatalf("search did not highlight the remove action: %v", got)
+	}
+	m = send(m, "enter") // begin capturing a new key
+	if !m.settingsCapture {
+		t.Fatal("enter did not start key capture")
+	}
+	if !strings.Contains(m.View(), "Press a key for remove") {
+		t.Error("capture mode did not prompt for the new key")
+	}
+	m = send(m, "x") // bind remove -> x
+	if m.settingsCapture {
+		t.Fatal("a keypress did not complete the capture")
+	}
+	if !slices.Equal(m.deps.Cfg.Keys.Remove, config.Binding{"x"}) {
+		t.Errorf("in-memory remove = %v, want [x] right after rebinding", m.deps.Cfg.Keys.Remove)
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("reload persisted config: %v", err)
+	}
+	if !slices.Equal(cfg.Keys.Remove, config.Binding{"x"}) {
+		t.Errorf("persisted remove = %v, want [x]", cfg.Keys.Remove)
+	}
+}
+
+// TestSettingsCaptureEscAborts confirms Esc during capture leaves the binding
+// untouched, and Esc in list mode closes the editor.
+func TestSettingsCaptureEscAborts(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 0)
+	m.deps.ConfigPath = filepath.Join(t.TempDir(), "config.toml")
+	before := slices.Clone(m.deps.Cfg.Keys.Remove)
+
+	m = send(m, "s")
+	for _, r := range "remove" {
+		m = send(m, string(r))
+	}
+	m = send(m, "enter") // capture
+	m = send(m, "esc")   // abort capture, stay in the editor
+	if m.settingsCapture {
+		t.Error("esc did not abort the capture")
+	}
+	if !m.settingsOn {
+		t.Error("esc during capture should return to the list, not close the editor")
+	}
+	if !slices.Equal(m.deps.Cfg.Keys.Remove, before) {
+		t.Errorf("aborted capture changed the binding: %v", m.deps.Cfg.Keys.Remove)
+	}
+	m = send(m, "esc") // now close the editor
+	if m.settingsOn {
+		t.Error("esc in list mode did not close the editor")
 	}
 }

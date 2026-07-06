@@ -245,6 +245,28 @@ func TestLoadDefaultKeysWhenFileMissing(t *testing.T) {
 	if !slices.Equal(cfg.Keys.Preview, config.Binding{"space"}) {
 		t.Errorf("default preview keys = %v, want [space]", cfg.Keys.Preview)
 	}
+	if !slices.Equal(cfg.Keys.Settings, config.Binding{"s"}) {
+		t.Errorf("default settings keys = %v, want [s]", cfg.Keys.Settings)
+	}
+}
+
+// TestKeyMapActionsCoverEveryBinding guards that Actions() enumerates the whole
+// KeyMap — validate and the in-TUI editor both rely on it, so a new field that
+// is not added here would silently escape both.
+func TestKeyMapActionsCoverEveryBinding(t *testing.T) {
+	actions := config.DefaultKeys().Actions()
+	names := make(map[string]bool, len(actions))
+	for _, a := range actions {
+		if a.Name == "" || a.Desc == "" {
+			t.Errorf("action has an empty name or description: %+v", a)
+		}
+		names[a.Name] = true
+	}
+	for _, want := range []string{"settings", "remove", "confirm", "cancel", "quit", "form_prev"} {
+		if !names[want] {
+			t.Errorf("Actions() is missing the %q action", want)
+		}
+	}
 }
 
 // TestLoadMergesKeysFieldWise verifies a [keys] table overrides only the actions

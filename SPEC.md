@@ -432,14 +432,20 @@ box shows the same rules in grey when it is not the selected row.
 - **A session selected:** you are not typing, so plain letters act on it — `→`/`Enter`
   open the live window, `k` remove (terminate if live, then delete from the list),
   `r` resume, `e` **rename** (a xanax-only UI label; never touches the harness's own
-  session), `↓` returns to the prompt box. `Ctrl+K`/`Ctrl+R` are aliases for terminals
-  that deliver them; `Ctrl+C` always quits.
+  session), `s` **settings** (open the keybindings editor, below), `↓` returns to the
+  prompt box. `Ctrl+K`/`Ctrl+R` are aliases for terminals that deliver them; `Ctrl+C`
+  always quits.
 - **Rename** opens an inline single-line editor pre-filled with the current title;
   Enter saves to the `sessions.title` column, Esc cancels.
 - Every dashboard key above is a default, not a hard-coded binding: the `[keys]`
   table in the config (§8) remaps any of them, and the footer hints follow suit.
   Only the interact-mode detach key lives elsewhere (`interact_exit_key`), since
   it is read inside the raw passthrough rather than the dashboard.
+- **Keybindings editor** (`s`): a centered, searchable modal — the same style as
+  the harness picker — listing every action with its current keys. `↑`/`↓` move,
+  Enter captures the next keypress as that action's binding and writes it to the
+  `[keys]` table (taking effect immediately), Esc closes. It edits the same file
+  `[keys]` documents, so changes made here and by hand are one and the same.
 - Live updates: the list reloads from SQLite once per second (supervisors are the
   writers). The startup reconciliation pass auto-resumes interrupted sessions (§6)
   before the first render.

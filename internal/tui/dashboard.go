@@ -58,6 +58,17 @@ type model struct {
 	search        string          // current search filter text
 	pickScroll    int             // scroll offset within filtered list
 
+	// settings/keybindings editor (opened with the settings key while a session
+	// is selected). It mirrors the harness picker: a searchable, scrollable list
+	// of actions, each showing its current keys. Confirm on a row captures the
+	// next keypress as that action's new binding (settingsCapture) and persists it.
+	settingsOn      bool
+	settingsCapture bool
+	settingsIdx     int
+	settingsScroll  int
+	settingsSearch  string
+	settingsInput   textinput.Model
+
 	allSessions []*session.Session // full scoped list
 	sessions    []*session.Session // filtered display list (grouped)
 	cursor      int                // selected session index (when !onComposer)
@@ -139,6 +150,12 @@ func Run(deps Deps) error {
 	si.CharLimit = 80
 	si.TextStyle = lipgloss.NewStyle().Foreground(colWhite)
 
+	gi := textinput.New()
+	gi.Prompt = ""
+	gi.Placeholder = "search settings..."
+	gi.CharLimit = 40
+	gi.TextStyle = lipgloss.NewStyle().Foreground(colWhite)
+
 	m := model{
 		deps:          deps,
 		composer:      ta,
@@ -150,6 +167,7 @@ func Run(deps Deps) error {
 		path:          headerPath(deps.Scope),
 		searchInput:   si,
 		searchFocused: false,
+		settingsInput: gi,
 	}
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
@@ -386,6 +404,9 @@ func (m model) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.picking {
 		return m.updatePickKey(msg)
+	}
+	if m.settingsOn {
+		return m.updateSettingsKey(msg)
 	}
 	if m.filtering {
 		return m.updateFilterKey(msg)
@@ -682,6 +703,8 @@ func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filterInput.SetValue(m.filter)
 		m.filterInput.CursorEnd()
 		return m, m.filterInput.Focus()
+	case keyMatches(k.Settings, msg):
+		return m.openSettings()
 	case keyMatches(k.QuitList, msg):
 		return m, tea.Quit
 	}
