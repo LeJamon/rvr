@@ -9,8 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,14 +49,14 @@ type model struct {
 	// harnesses lists the configured harness names; harnessIdx selects which
 	// one new sessions launch with. Tab opens a picker (scales to many
 	// harnesses, unlike cycling).
-	harnesses  []string
-	harnessIdx int
-	picking    bool // harness picker is open
-	pickIdx    int  // highlighted row in the picker
+	harnesses     []string
+	harnessIdx    int
+	picking       bool            // harness picker is open
+	pickIdx       int             // highlighted row in the picker
 	searchInput   textinput.Model // search input in the harness picker
-	searchFocused bool           // search input currently has keyboard focus
-	search      string            // current search filter text
-	pickScroll  int            // scroll offset within filtered list
+	searchFocused bool            // search input currently has keyboard focus
+	search        string          // current search filter text
+	pickScroll    int             // scroll offset within filtered list
 
 	allSessions []*session.Session // full scoped list
 	sessions    []*session.Session // filtered display list (grouped)
@@ -71,7 +71,8 @@ type model struct {
 	filter      string
 	filterInput textinput.Model
 
-	addingHarness bool
+	addingHarness bool   // the harness form (add or modify) is open
+	editHarness   string // "" = adding a new harness; else the name being modified
 	formInputs    []textinput.Model
 	formField     int
 	formErr       string
@@ -279,6 +280,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.composer.SetWidth(max(20, msg.Width-2))
 		m.syncComposerHeight() // wrap width changed, so the row count may have too
 		m.renameInput.Width = max(20, msg.Width-4)
+		if m.addingHarness {
+			m.syncFormWidths() // keep the form inputs sized to the (resized) modal
+		}
 		return m, nil
 
 	case sessionsMsg:
@@ -506,11 +510,14 @@ func (m model) updatePickKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.Type == tea.KeyRunes && string(msg.Runes) == "+" {
 		return m.startAddHarness()
 	}
-	// When the search input is NOT focused: 'd' sets default; any other letter
-	// focuses the search bar.
+	// When the search input is NOT focused: 'd' sets default, 'm' modifies the
+	// highlighted harness; any other letter focuses the search bar.
 	if !m.searchFocused && msg.Type == tea.KeyRunes {
 		if string(msg.Runes) == "d" {
 			return m.setDefaultHarness()
+		}
+		if string(msg.Runes) == "m" {
+			return m.startModifyHarness()
 		}
 		r := string(msg.Runes)
 		if len(r) == 1 && (r[0] >= 'a' && r[0] <= 'z' || r[0] >= 'A' && r[0] <= 'Z' || r[0] >= '0' && r[0] <= '9' || r[0] == '-' || r[0] == '_') {
