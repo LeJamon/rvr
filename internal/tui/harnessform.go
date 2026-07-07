@@ -202,6 +202,7 @@ func (m model) submitHarness() (tea.Model, tea.Cmd) {
 	m.addingHarness = false
 	m.editHarness = ""
 	m.status = verb + " harness " + spec.name
+	m.statusIsError = false
 	return m, m.composer.Focus()
 }
 

@@ -5,7 +5,9 @@
 package tui
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -98,6 +100,7 @@ type model struct {
 	width, height int
 	path          string // scope (or cwd), home-relative, for the header
 	status        string
+	statusIsError bool
 	err           error
 
 	// confirmQuit is armed by the first Ctrl+C; the next Ctrl+C (before any
@@ -126,6 +129,7 @@ type tickMsg struct{}
 // (a launch failed before the session captured it, so the user can retry).
 type actionDoneMsg struct {
 	status        string
+	failed        bool
 	restorePrompt string
 }
 
@@ -355,6 +359,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionDoneMsg:
 		m.status = msg.status
+		m.statusIsError = msg.failed
 		// Put a would-be-lost prompt back, but only if the box is empty — a
 		// background launch stays interactive, so the user may have started
 		// typing something new we must not clobber.
@@ -678,9 +683,11 @@ func (m model) setDefaultHarness() (tea.Model, tea.Cmd) {
 	m.searchFocused = false
 	if err := setDefaultInConfig(m.deps.ConfigPath, name); err != nil {
 		m.status = "set default failed: " + err.Error()
+		m.statusIsError = true
 		return m, m.composer.Focus()
 	}
 	m.status = "set " + name + " as default"
+	m.statusIsError = false
 	return m, m.composer.Focus()
 }
 
@@ -790,10 +797,12 @@ func (m model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // execInteractive shells out to a subcommand that owns the terminal (attach,
 // resume). Bubble Tea releases and restores the terminal around it.
 func (m model) execInteractive(sub string, arg string) tea.Cmd {
+	var stderr bytes.Buffer
 	c := exec.Command(m.deps.SelfPath, sub, arg)
+	c.Stderr = io.MultiWriter(os.Stderr, &stderr)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		if err != nil {
-			return actionDoneMsg{status: fmt.Sprintf("%s failed: %v", sub, err)}
+			return actionDoneMsg{status: subprocessFailureStatus(sub, err, stderr.String()), failed: true}
 		}
 		return actionDoneMsg{}
 	})
@@ -809,7 +818,7 @@ func (m model) execKillRemove(s *session.Session) tea.Cmd {
 			_ = attach.Kill(sock)
 		}
 		if err := m.deps.Store.DeleteSession(id); err != nil {
-			return actionDoneMsg{status: "remove failed: " + err.Error()}
+			return actionDoneMsg{status: "remove failed: " + err.Error(), failed: true}
 		}
 		return actionDoneMsg{status: "removed " + shortID(id)}
 	}
@@ -835,8 +844,11 @@ func newSessionArgs(harness, repo, prompt string, attach bool) []string {
 func (m model) execNewBackground(prompt string) tea.Cmd {
 	h, repo := m.harness(), m.deps.Scope
 	return func() tea.Msg {
-		if err := exec.Command(m.deps.SelfPath, newSessionArgs(h, repo, prompt, false)...).Run(); err != nil {
-			return actionDoneMsg{status: "launch failed: " + err.Error(), restorePrompt: prompt}
+		var stderr bytes.Buffer
+		c := exec.Command(m.deps.SelfPath, newSessionArgs(h, repo, prompt, false)...)
+		c.Stderr = &stderr
+		if err := c.Run(); err != nil {
+			return actionDoneMsg{status: subprocessFailureStatus("launch", err, stderr.String()), failed: true, restorePrompt: prompt}
 		}
 		return actionDoneMsg{status: "launched " + h + ": " + truncate(prompt, 40)}
 	}
@@ -845,10 +857,12 @@ func (m model) execNewBackground(prompt string) tea.Cmd {
 // execNewAttach launches a new session and drops straight into the harness's
 // live window (its own input, native /command and @file syntax included).
 func (m model) execNewAttach(prompt string) tea.Cmd {
+	var stderr bytes.Buffer
 	c := exec.Command(m.deps.SelfPath, newSessionArgs(m.harness(), m.deps.Scope, prompt, true)...)
+	c.Stderr = io.MultiWriter(os.Stderr, &stderr)
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		if err != nil {
-			return actionDoneMsg{status: "launch failed: " + err.Error(), restorePrompt: prompt}
+			return actionDoneMsg{status: subprocessFailureStatus("launch", err, stderr.String()), failed: true, restorePrompt: prompt}
 		}
 		return actionDoneMsg{}
 	})
@@ -857,7 +871,7 @@ func (m model) execNewAttach(prompt string) tea.Cmd {
 func (m model) execRename(id, title string) tea.Cmd {
 	return func() tea.Msg {
 		if err := m.deps.Store.SetTitle(id, title); err != nil {
-			return actionDoneMsg{status: "rename failed: " + err.Error()}
+			return actionDoneMsg{status: "rename failed: " + err.Error(), failed: true}
 		}
 		return actionDoneMsg{status: "renamed to " + truncate(title, 40)}
 	}
@@ -884,6 +898,26 @@ func (m model) current() *session.Session {
 		return nil
 	}
 	return m.sessions[m.cursor]
+}
+
+func subprocessFailureStatus(action string, err error, stderr string) string {
+	detail := lastStderrLine(stderr)
+	if detail == "" {
+		detail = err.Error()
+	}
+	return fmt.Sprintf("%s failed: %s", action, detail)
+}
+
+func lastStderrLine(stderr string) string {
+	lines := strings.Split(strings.TrimSpace(stderr), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		return strings.TrimPrefix(line, "xanax: ")
+	}
+	return ""
 }
 
 // selectedID is the id of the selected session, or "" when the prompt box (or

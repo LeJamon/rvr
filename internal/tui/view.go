@@ -546,7 +546,11 @@ func (m model) footer() string {
 	}
 	out := footerStyle.Render(hint)
 	if m.status != "" {
-		out = mutedStyle.Render(m.status) + "   " + out
+		statusStyle := mutedStyle
+		if m.statusIsError {
+			statusStyle = errStyle
+		}
+		out = statusStyle.Render(m.status) + "   " + out
 	}
 	return out
 }

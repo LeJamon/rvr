@@ -579,13 +579,16 @@ func TestLaunchFailureRestoresPrompt(t *testing.T) {
 	m := newTestModel(nil)
 	// A launch that failed before the session captured the prompt hands it back
 	// so the user can retry instead of losing what they typed.
-	next, _ := m.Update(actionDoneMsg{status: "launch failed: boom", restorePrompt: "my prompt"})
+	next, _ := m.Update(actionDoneMsg{status: "launch failed: boom", failed: true, restorePrompt: "my prompt"})
 	m = next.(model)
 	if m.composer.Value() != "my prompt" {
 		t.Errorf("prompt not restored: %q", m.composer.Value())
 	}
 	if m.status != "launch failed: boom" {
 		t.Errorf("status = %q, want the failure message", m.status)
+	}
+	if !m.statusIsError {
+		t.Error("failure status was not marked as an error")
 	}
 }
 
@@ -598,6 +601,55 @@ func TestLaunchFailureDoesNotClobberNewText(t *testing.T) {
 	m = next.(model)
 	if m.composer.Value() != "something new" {
 		t.Errorf("composer clobbered: %q, want %q", m.composer.Value(), "something new")
+	}
+}
+
+func TestSubprocessFailureStatusUsesCapturedStderr(t *testing.T) {
+	got := subprocessFailureStatus("resume", errors.New("exit status 1"),
+		"first line\nxanax: session abc cannot be resumed\n")
+	want := "resume failed: session abc cannot be resumed"
+	if got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+}
+
+func TestSubprocessFailureStatusFallsBackToExitError(t *testing.T) {
+	got := subprocessFailureStatus("resume", errors.New("exit status 1"), "")
+	want := "resume failed: exit status 1"
+	if got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+}
+
+func TestExecNewBackgroundReportsChildStderr(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "fail-new")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho ignored >&2\necho 'xanax: missing harness binary' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(nil)
+	m.deps.SelfPath = script
+	msg := m.execNewBackground("fix it")().(actionDoneMsg)
+
+	if msg.status != "launch failed: missing harness binary" {
+		t.Fatalf("status = %q", msg.status)
+	}
+	if !msg.failed {
+		t.Fatal("background launch failure was not marked failed")
+	}
+	if msg.restorePrompt != "fix it" {
+		t.Fatalf("restorePrompt = %q, want original prompt", msg.restorePrompt)
+	}
+}
+
+func TestFooterRendersFailureStatusWithErrorStyle(t *testing.T) {
+	m := newTestModel(nil)
+	m.status = "launch failed: boom"
+	m.statusIsError = true
+
+	footer := m.footer()
+	if !strings.Contains(footer, errStyle.Render(m.status)) {
+		t.Fatalf("footer did not render status with error style: %q", footer)
 	}
 }
 

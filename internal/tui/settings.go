@@ -127,21 +127,25 @@ func (m model) commitCapture() (tea.Model, tea.Cmd) {
 
 	if m.deps.ConfigPath == "" {
 		m.status = "rebind failed: no config path"
+		m.statusIsError = true
 		return m, nil
 	}
 	orig, origErr := os.ReadFile(m.deps.ConfigPath)
 	if err := setKeyBindingInConfig(m.deps.ConfigPath, name, pending); err != nil {
 		m.status = "rebind failed: " + err.Error()
+		m.statusIsError = true
 		return m, nil
 	}
 	cfg, err := config.Load(m.deps.ConfigPath)
 	if err != nil {
 		restoreConfig(m.deps.ConfigPath, orig, origErr)
 		m.status = "rebind reload failed: " + err.Error()
+		m.statusIsError = true
 		return m, nil
 	}
 	m.deps.Cfg = cfg // new bindings take effect immediately (keyMatches reads Cfg.Keys)
 	m.status = fmt.Sprintf("bound %s to %s", name, strings.Join(pending, ", "))
+	m.statusIsError = false
 	return m, nil
 }
 
