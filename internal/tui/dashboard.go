@@ -40,8 +40,8 @@ type Deps struct {
 
 // model treats the session list and the prompt box as one navigable column.
 // The arrow keys always move the selection; the prompt box (last row) only
-// accepts text while it is the selected row. When a session is selected, plain
-// letter keys act on it — so no Ctrl-chords are required.
+// accepts text while it is the selected row. When a session is selected, action
+// bindings act on it instead of typing into the composer.
 type model struct {
 	deps     Deps
 	composer textarea.Model
@@ -95,6 +95,9 @@ type model struct {
 	previewOn   bool   // preview panel open (space toggles it on the selected session)
 	previewText string // last fetched preview of the selected session
 
+	attachAliveFn func(string) bool
+	attachKillFn  func(string) error
+
 	width, height int
 	path          string // scope (or cwd), home-relative, for the header
 	status        string
@@ -103,6 +106,10 @@ type model struct {
 	// confirmQuit is armed by the first Ctrl+C; the next Ctrl+C (before any
 	// other key) quits. Any other key disarms it. See updateKey / footer.
 	confirmQuit bool
+
+	// confirmRemoveID is armed by the first remove key on a live session; pressing
+	// remove again on the same session performs the destructive action.
+	confirmRemoveID string
 }
 
 const previewRows = 8
@@ -312,6 +319,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var selCmd tea.Cmd
 		m, selCmd = m.reselect(prevID)
 		m = m.closeMovedPreview(prevID)
+		m = m.clearStaleRemoveConfirm()
 		if firstLoad {
 			// Show branches promptly rather than waiting for the 5 s git tick
 			// (branches only — the slower gh PR lookup stays on the tick).
@@ -355,6 +363,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionDoneMsg:
 		m.status = msg.status
+		m.confirmRemoveID = ""
 		// Put a would-be-lost prompt back, but only if the box is empty — a
 		// background launch stays interactive, so the user may have started
 		// typing something new we must not clobber.
@@ -378,10 +387,14 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		m.confirmQuit = true
+		m.confirmRemoveID = ""
 		return m, nil
 	}
 	// Any other key disarms a pending quit confirmation.
 	m.confirmQuit = false
+	if m.confirmRemoveID != "" && !keyMatches(m.keys().Remove, msg) {
+		m.confirmRemoveID = ""
+	}
 	// The peek is per-session and closes whenever a key moves the selection to a
 	// different session (reopened with space). updateKey is the single choke point
 	// for all key handling, so capturing the selected id here and re-checking it
@@ -684,9 +697,8 @@ func (m model) setDefaultHarness() (tea.Model, tea.Cmd) {
 	return m, m.composer.Focus()
 }
 
-// updateSessionKey runs while a session is selected. Plain letters act on it
-// (nothing is typed), so no Ctrl-chords are needed; the Ctrl variants are kept
-// as aliases.
+// updateSessionKey runs while a session is selected. Action bindings act on it
+// instead of typing into the composer.
 func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	k := m.keys()
 	// Cancel clears an applied filter — checked before the empty-list guard so it
@@ -704,7 +716,7 @@ func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyMatches(k.Open, msg):
 		return m, m.openSession(s)
 	case keyMatches(k.Remove, msg):
-		return m, m.execKillRemove(s)
+		return m.confirmOrRemove(s)
 	case keyMatches(k.Resume, msg):
 		return m, m.execInteractive("resume", s.ID)
 	case keyMatches(k.Preview, msg):
@@ -722,6 +734,20 @@ func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+func (m model) confirmOrRemove(s *session.Session) (tea.Model, tea.Cmd) {
+	if m.removeNeedsConfirm(s) && m.confirmRemoveID != s.ID {
+		m.confirmRemoveID = s.ID
+		m.status = "press " + keyHint(m.keys().Remove) + " again to kill and remove " + shortID(s.ID)
+		return m, nil
+	}
+	m.confirmRemoveID = ""
+	return m, m.execKillRemove(s)
+}
+
+func (m model) removeNeedsConfirm(s *session.Session) bool {
+	return s.Status.Live() || m.alive(s.ID)
 }
 
 // updateFilterKey runs while the filter bar is open: typing refines the filter
@@ -805,11 +831,17 @@ func (m model) execKillRemove(s *session.Session) tea.Cmd {
 	id := s.ID
 	sock := filepath.Join(m.deps.SocketDir, id+".sock")
 	return func() tea.Msg {
-		if attach.Alive(sock) {
-			_ = attach.Kill(sock)
+		alive := m.attachAlive(sock)
+		if alive {
+			if err := m.attachKill(sock); err != nil {
+				return actionDoneMsg{status: "remove failed: kill " + shortID(id) + ": " + err.Error()}
+			}
 		}
 		if err := m.deps.Store.DeleteSession(id); err != nil {
 			return actionDoneMsg{status: "remove failed: " + err.Error()}
+		}
+		if alive {
+			return actionDoneMsg{status: "killed and removed " + shortID(id)}
 		}
 		return actionDoneMsg{status: "removed " + shortID(id)}
 	}
@@ -875,7 +907,7 @@ func (m model) openSession(s *session.Session) tea.Cmd {
 	if m.deps.Cfg.CanResume(s) {
 		return m.execInteractive("resume", s.ID)
 	}
-	msg := "session " + shortID(s.ID) + " has ended — press k to remove"
+	msg := "session " + shortID(s.ID) + " has ended — press " + keyHint(m.keys().Remove) + " to remove"
 	return func() tea.Msg { return actionDoneMsg{status: msg} }
 }
 
@@ -893,6 +925,13 @@ func (m model) selectedID() string {
 		return s.ID
 	}
 	return ""
+}
+
+func (m model) clearStaleRemoveConfirm() model {
+	if m.confirmRemoveID != "" && m.selectedID() != m.confirmRemoveID {
+		m.confirmRemoveID = ""
+	}
+	return m
 }
 
 // reselect re-anchors the selection after the periodic reload rebuilt the list.
@@ -971,7 +1010,21 @@ type previewMsg struct {
 }
 
 func (m model) alive(id string) bool {
-	return attach.Alive(filepath.Join(m.deps.SocketDir, id+".sock"))
+	return m.attachAlive(filepath.Join(m.deps.SocketDir, id+".sock"))
+}
+
+func (m model) attachAlive(sock string) bool {
+	if m.attachAliveFn != nil {
+		return m.attachAliveFn(sock)
+	}
+	return attach.Alive(sock)
+}
+
+func (m model) attachKill(sock string) error {
+	if m.attachKillFn != nil {
+		return m.attachKillFn(sock)
+	}
+	return attach.Kill(sock)
 }
 
 // grouped sorts sessions by state group then recency (SPEC.md §10).

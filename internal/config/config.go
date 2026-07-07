@@ -123,7 +123,7 @@ type KeyMap struct {
 
 	// Session list — active while a session row is selected.
 	Open     Binding `toml:"open"`      // open the live session window
-	Remove   Binding `toml:"remove"`    // kill (if live) then delete from the list
+	Remove   Binding `toml:"remove"`    // remove the session; live sessions confirm first
 	Resume   Binding `toml:"resume"`    // resume the session
 	Rename   Binding `toml:"rename"`    // rename its xanax label
 	Preview  Binding `toml:"preview"`   // toggle the screen peek
@@ -226,14 +226,14 @@ func DefaultTheme() Theme {
 // field-wise (mergeKeys), so an override changes only the actions it names.
 func DefaultKeys() KeyMap {
 	return KeyMap{
-		Up:      Binding{"up"},
-		Down:    Binding{"down"},
+		Up:      Binding{"up", "k"},
+		Down:    Binding{"down", "j"},
 		Confirm: Binding{"enter"},
 		Cancel:  Binding{"esc"},
 		Quit:    Binding{"ctrl+c"},
 
 		Open:     Binding{"enter", "right", "o"},
-		Remove:   Binding{"k", "ctrl+k"},
+		Remove:   Binding{"ctrl+k"},
 		Resume:   Binding{"r", "ctrl+r"},
 		Rename:   Binding{"e"},
 		Preview:  Binding{"space"},
@@ -265,7 +265,7 @@ func (k KeyMap) Actions() []KeyAction {
 		{"cancel", "back, cancel, or clear an applied filter", k.Cancel},
 		{"quit", "confirm-then-exit, from any mode", k.Quit},
 		{"open", "open the selected session's window", k.Open},
-		{"remove", "kill (if live) then remove the session", k.Remove},
+		{"remove", "remove the session; confirms before killing live sessions", k.Remove},
 		{"resume", "resume the selected session", k.Resume},
 		{"rename", "rename the session's xanax label", k.Rename},
 		{"preview", "toggle the screen peek", k.Preview},

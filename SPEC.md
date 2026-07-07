@@ -348,9 +348,11 @@ branch = "6"
 # harness form; the interact-mode detach key is separate (interact_exit_key).
 # Precedence: `quit` is matched before every mode, and `up`/`down` before the
 # session list and composer, so if you bind one of them to a key a context action
-# also uses (e.g. up = ["up", "k"] while remove keeps "k"), the global one wins.
+# also uses, the global one wins.
 [keys]
-remove = ["k", "ctrl+k"]         # override just the actions you want to remap
+up = ["up", "k"]
+down = ["down", "j"]
+remove = ["ctrl+k"]              # live sessions ask for this key a second time
 filter = ["ctrl+f", "/"]
 # up, down, confirm, cancel, quit, open, resume, rename, preview, quit_list,
 # launch_attach, harness_picker, add_harness, set_default, modify_harness,
@@ -412,9 +414,9 @@ Two layers, both driven by the arrow keys. `←` always means "back / up one lev
 - Each row: status glyph, title, harness, repo name, relative age, and (for waiting
   sessions) the status detail.
 The sessions and the **prompt box** form one navigable column; the prompt box is the
-last row. `↑`/`↓` always move the selection. The selected row is framed with full-width
-top and bottom rules (no left/right sides) in the navigation accent color; the prompt
-box shows the same rules in grey when it is not the selected row.
+last row. `↑`/`↓` and `k`/`j` always move the selection. The selected row is framed
+with full-width top and bottom rules (no left/right sides) in the navigation accent
+color; the prompt box shows the same rules in grey when it is not the selected row.
 
 - **Prompt box selected:** typed/pasted text goes into it; **Enter** launches a new
   session in the selected harness (current repo, no attach, so you can fire off
@@ -428,12 +430,12 @@ box shows the same rules in grey when it is not the selected row.
   harness picker: a list of all configured harnesses (`↑`/`↓` + Enter, Esc cancels) —
   scales to any number of harnesses. The composer label always names the harness the
   next session will use. `↑` moves up into the sessions.
-- **A session selected:** you are not typing, so plain letters act on it — `→`/`Enter`
-  open the live window, `k` remove (terminate if live, then delete from the list),
-  `r` resume, `e` **rename** (a xanax-only UI label; never touches the harness's own
-  session), `s` **settings** (open the keybindings editor, below), `↓` returns to the
-  prompt box. `Ctrl+K`/`Ctrl+R` are aliases for terminals that deliver them; `Ctrl+C`
-  always quits.
+- **A session selected:** you are not typing, so action keys act on it — `→`/`Enter`
+  open the live window, `Ctrl+K` removes it (press `Ctrl+K` again first for live
+  sessions, so a live harness is not killed by one keypress), `r` resumes, `e`
+  **renames** (a xanax-only UI label; never touches the harness's own session), `s`
+  opens **settings** (the keybindings editor, below), and `↓`/`j` returns to the
+  prompt box. `Ctrl+C` always quits.
 - **Rename** opens an inline single-line editor pre-filled with the current title;
   Enter saves to the `sessions.title` column, Esc cancels.
 - Every dashboard key above is a default, not a hard-coded binding: the `[keys]`
@@ -445,7 +447,7 @@ box shows the same rules in grey when it is not the selected row.
 - **Keybindings editor** (`s`): a centered, searchable modal — the same style as
   the harness picker — listing every action with its current keys. `↑`/`↓` move and
   Enter starts a capture for the highlighted action; then press one or more keys
-  (each added once) and Enter again to save them — so you can bind aliases like `k`
+  (each added once) and Enter again to save them — so you can bind aliases like `x`
   and `ctrl+k` together — or Esc to cancel. The binding is written to the `[keys]`
   table and takes effect immediately; Esc in the list closes the editor. It edits
   the same file `[keys]` documents, so changes made here and by hand are one and the
