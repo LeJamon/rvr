@@ -28,9 +28,12 @@ func newNewCmd() *cobra.Command {
 		Short: "Launch a new agent session",
 		Long: `Launch a new agent session.
 
-With no prompt, xanax starts a fresh interactive harness. Multiple prompt
+With no prompt, rvr starts a fresh interactive harness. Multiple prompt
 arguments are joined with spaces. Use "-" as the only prompt argument to read
-the prompt from stdin.`,
+the prompt from stdin.
+
+When rvr attaches to the new session, press Left arrow or the configured detach
+key (ctrl+\ by default). The session keeps running after you detach.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			prompt, err := promptFromNewArgs(cmd, args)
