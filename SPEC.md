@@ -397,7 +397,7 @@ Defaults for opencode, pi, and codex are built in; the file is optional.
 ```
 xanax                       # dashboard (default command)
 xanax new [flags] "prompt"  # --harness, --repo (default "."), --title, --attach/--no-attach
-xanax list [--json]
+xanax list [--json]        # aliases: ls, ps
 xanax attach <id-or-prefix>
 xanax resume <id-or-prefix> # reattach if alive, else native-resume relaunch (D3)
 xanax kill   <id-or-prefix>

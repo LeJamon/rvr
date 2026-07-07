@@ -32,7 +32,7 @@ xanax                                    # dashboard: all sessions
 xanax ~/code/api                         # dashboard scoped to one path
 xanax new --harness opencode "fix the failing tests"
 xanax new --harness pi --repo ~/code/api "add pagination"
-xanax list [--json]
+xanax list [--json]                       # aliases: ls, ps
 xanax attach <id>                        # reattach to a live session
 xanax resume <id>                        # reattach, or relaunch a dead one natively
 xanax kill   <id>
