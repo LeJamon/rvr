@@ -451,6 +451,9 @@ func Load(path string) (*Config, error) {
 		if merged.Command == "" {
 			merged.Command = name
 		}
+		if fh.FullScreen == nil && merged.Adapter == AdapterGeneric && filepath.Base(merged.Command) == "codex" {
+			merged.FullScreen = true
+		}
 		cfg.Harnesses[name] = merged
 	}
 

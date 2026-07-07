@@ -70,6 +70,9 @@ command = "/opt/opencode/bin/opencode"
 command = "goose"
 args = ["session"]
 resume_args = ["session", "--resume"]
+
+[harness.work-codex]
+command = "/opt/codex/bin/codex"
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -102,6 +105,11 @@ resume_args = ["session", "--resume"]
 	}
 	if len(goose.ResumeArgs) != 2 {
 		t.Errorf("goose resume_args = %v", goose.ResumeArgs)
+	}
+
+	workCodex := cfg.Harnesses["work-codex"]
+	if workCodex.Adapter != config.AdapterGeneric || !workCodex.FullScreen {
+		t.Errorf("codex command alias = %+v, want generic full_screen harness", workCodex)
 	}
 }
 
@@ -145,6 +153,10 @@ func TestLoadCodexDefaultsCanBeExplicitlyDisabled(t *testing.T) {
 prompt_positional = false
 full_screen = false
 idle_timeout = 0
+
+[harness.work-codex]
+command = "codex"
+full_screen = false
 `)
 	cfg, err := config.Load(path)
 	if err != nil {
@@ -165,6 +177,9 @@ idle_timeout = 0
 	}
 	if !slices.Equal(codex.ResumeArgs, []string{"resume", "--last"}) {
 		t.Errorf("codex resume_args = %v, want default resume args preserved", codex.ResumeArgs)
+	}
+	if cfg.Harnesses["work-codex"].FullScreen {
+		t.Error("codex command alias full_screen = true, want explicit false override")
 	}
 }
 

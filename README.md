@@ -115,6 +115,8 @@ args        = ["session"]                # start goose's interactive session
 resume_args = ["session", "--resume"]    # resume the most recent session
 # A CLI that takes the prompt as a flag can set prompt_arg = "--flag"
 # (or prompt_positional = true) to skip typing it into the PTY.
+# Diff-rendered TUIs can set full_screen = true to attach from a screen snapshot
+# instead of raw scrollback replay.
 
 ```
 

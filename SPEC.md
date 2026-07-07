@@ -390,6 +390,8 @@ args        = ["session"]                # start goose's interactive session
 resume_args = ["session", "--resume"]    # resume the most recent session
 # A CLI that accepts the prompt as a flag can add prompt_arg = "--flag"
 # (or prompt_positional = true) to deliver it on the command line instead.
+# Diff-rendered TUIs can add full_screen = true to attach from a screen snapshot
+# instead of raw scrollback replay.
 
 ```
 
