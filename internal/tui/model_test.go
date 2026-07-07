@@ -133,6 +133,18 @@ func TestArrowNavigationBetweenSessionsAndComposer(t *testing.T) {
 	}
 }
 
+func TestVimNavigationKeysMoveSelection(t *testing.T) {
+	m := selectSession(newTestModel(sampleSessions()), 1)
+	m = send(m, "k")
+	if m.onComposer || m.cursor != 0 {
+		t.Fatalf("k should move selection up: onComposer=%v cursor=%d", m.onComposer, m.cursor)
+	}
+	m = send(m, "j")
+	if m.onComposer || m.cursor != 1 {
+		t.Fatalf("j should move selection down: onComposer=%v cursor=%d", m.onComposer, m.cursor)
+	}
+}
+
 func TestComposerAcceptsTextOnlyWhenSelected(t *testing.T) {
 	// Selected: typing lands in the composer.
 	m := newTestModel(sampleSessions())
@@ -163,7 +175,7 @@ func TestComposerEnterLaunchesAndClears(t *testing.T) {
 	}
 }
 
-func TestSessionLetterAndCtrlKeysAct(t *testing.T) {
+func TestCtrlKRemovesTerminalSession(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "x.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -178,14 +190,114 @@ func TestSessionLetterAndCtrlKeysAct(t *testing.T) {
 	m.deps.Store = st
 	m.deps.SocketDir = t.TempDir()
 
-	// Plain 'k' removes (no Ctrl needed).
-	_, cmd := m.Update(key("k"))
+	_, cmd := m.Update(key("ctrl+k"))
 	if cmd == nil {
-		t.Fatal("k on a selected session returned no command")
+		t.Fatal("ctrl+k on a terminal selected session returned no command")
 	}
 	cmd()
 	if _, err := st.GetSession("todelete01"); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("k did not remove the session: %v", err)
+		t.Errorf("ctrl+k did not remove the session: %v", err)
+	}
+}
+
+func TestLiveRemoveRequiresConfirmation(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	sess := &session.Session{ID: "live0001", Title: "running", RepoPath: "/x", Harness: "opencode", Status: session.StatusRunning}
+	if err := st.CreateSession(sess); err != nil {
+		t.Fatal(err)
+	}
+
+	m := selectSession(newTestModel([]*session.Session{sess}), 0)
+	m.deps.Store = st
+	m.deps.SocketDir = t.TempDir()
+
+	next, cmd := m.Update(key("ctrl+k"))
+	m = next.(model)
+	if cmd != nil {
+		t.Fatal("first remove press on a live session should only arm confirmation")
+	}
+	if m.confirmRemoveID != "live0001" {
+		t.Fatalf("confirmRemoveID = %q, want live0001", m.confirmRemoveID)
+	}
+	if _, err := st.GetSession("live0001"); err != nil {
+		t.Fatalf("first remove press deleted the live session: %v", err)
+	}
+	if foot := m.footer(); !strings.Contains(foot, "again to kill and remove live0001") {
+		t.Errorf("footer did not show remove confirmation: %q", foot)
+	}
+
+	next, cmd = m.Update(key("ctrl+k"))
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("second remove press on the same live session returned no command")
+	}
+	cmd()
+	if _, err := st.GetSession("live0001"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("confirmed remove did not delete the session: %v", err)
+	}
+	if m.confirmRemoveID != "" {
+		t.Errorf("confirmation remained armed after dispatch: %q", m.confirmRemoveID)
+	}
+}
+
+func TestRemoveConfirmationDisarmsOnOtherKey(t *testing.T) {
+	sess := &session.Session{ID: "live0002", Title: "running", RepoPath: "/x", Harness: "opencode", Status: session.StatusRunning}
+	m := selectSession(newTestModel([]*session.Session{sess}), 0)
+
+	next, cmd := m.Update(key("ctrl+k"))
+	m = next.(model)
+	if cmd != nil || m.confirmRemoveID != "live0002" {
+		t.Fatalf("first remove did not arm confirmation: cmd=%v id=%q", cmd, m.confirmRemoveID)
+	}
+
+	next, _ = m.Update(key("j"))
+	m = next.(model)
+	if m.confirmRemoveID != "" {
+		t.Errorf("non-remove key did not disarm confirmation: %q", m.confirmRemoveID)
+	}
+}
+
+func TestKillFailureDoesNotDeleteSession(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	sess := &session.Session{ID: "killfail1", Title: "running", RepoPath: "/x", Harness: "opencode", Status: session.StatusRunning}
+	if err := st.CreateSession(sess); err != nil {
+		t.Fatal(err)
+	}
+
+	m := selectSession(newTestModel([]*session.Session{sess}), 0)
+	m.deps.Store = st
+	m.deps.SocketDir = t.TempDir()
+	m.attachAliveFn = func(string) bool { return true }
+	m.attachKillFn = func(string) error { return errors.New("socket closed") }
+
+	next, _ := m.Update(key("ctrl+k"))
+	m = next.(model)
+	next, cmd := m.Update(key("ctrl+k"))
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("confirmed live remove returned no command")
+	}
+	raw := cmd()
+	msg, ok := raw.(actionDoneMsg)
+	if !ok {
+		t.Fatalf("remove command returned %T, want actionDoneMsg", raw)
+	}
+	if !strings.Contains(msg.status, "remove failed: kill killfail") {
+		t.Fatalf("status = %q, want kill failure", msg.status)
+	}
+	if _, err := st.GetSession("killfail1"); err != nil {
+		t.Fatalf("kill failure deleted the session: %v", err)
+	}
+	if m.confirmRemoveID != "" {
+		t.Errorf("confirmation remained armed after confirmed remove: %q", m.confirmRemoveID)
 	}
 }
 
@@ -743,7 +855,7 @@ func TestReloadWhileFilteringZeroKeepsSelection(t *testing.T) {
 
 // TestReloadEmptyWithFilterFocusesComposer guards the flip side of the case
 // above: when the underlying list becomes genuinely empty while a filter string
-// is still set (e.g. the last matching session was removed with k), the
+// is still set (e.g. the last matching session was removed), the
 // composer MUST be focused — otherwise current() is nil and every keystroke is
 // silently dropped with no way back but the arrow keys.
 func TestReloadEmptyWithFilterFocusesComposer(t *testing.T) {
@@ -977,7 +1089,7 @@ func TestSpaceTypesIntoComposer(t *testing.T) {
 }
 
 // TestRebindingSessionAction proves a config remap changes which key acts: after
-// rebinding remove from 'k' to 'x', 'x' removes the session and 'k' is inert.
+// rebinding remove from Ctrl+K to 'x', 'x' removes the session and Ctrl+K is inert.
 func TestRebindingSessionAction(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "x.db"))
 	if err != nil {
@@ -991,11 +1103,14 @@ func TestRebindingSessionAction(t *testing.T) {
 	m := selectSession(newTestModel([]*session.Session{sess}), 0)
 	m.deps.Store = st
 	m.deps.SocketDir = t.TempDir()
-	m.deps.Cfg.Keys.Remove = config.Binding{"x"} // rebind k -> x
+	m.deps.Cfg.Keys.Remove = config.Binding{"x"} // rebind ctrl+k -> x
 
 	// The old key no longer acts.
-	if _, cmd := m.Update(key("k")); cmd != nil {
-		t.Fatal("'k' still acted after remove was rebound to 'x'")
+	if _, cmd := m.Update(key("ctrl+k")); cmd != nil {
+		t.Fatal("ctrl+k still acted after remove was rebound to 'x'")
+	}
+	if _, err := st.GetSession("rebind0001"); err != nil {
+		t.Fatalf("old remove key deleted the session: %v", err)
 	}
 	// The new key does.
 	_, cmd := m.Update(key("x"))

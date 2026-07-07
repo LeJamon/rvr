@@ -506,6 +506,9 @@ func (m model) footer() string {
 	if m.confirmQuit {
 		return warnStyle.Render("Press " + keyHint(k.Quit) + " again to exit xanax")
 	}
+	if m.confirmRemoveID != "" {
+		return warnStyle.Render("Press " + keyHint(k.Remove) + " again to kill and remove " + shortID(m.confirmRemoveID))
+	}
 	// Hints are built from the live bindings (keyHint), so remapping a key in the
 	// config updates the footer to match rather than advertising a stale default.
 	updown := keyHint(k.Up) + "/" + keyHint(k.Down)
