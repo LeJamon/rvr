@@ -30,8 +30,9 @@ Runs on macOS and Linux.
 ```sh
 xanax                                    # dashboard: all sessions
 xanax ~/code/api                         # dashboard scoped to one path
-xanax new --harness opencode "fix the failing tests"
+xanax new --harness opencode fix the failing tests
 xanax new --harness pi --repo ~/code/api "add pagination"
+printf '%s\n' "long prompt" | xanax new -
 xanax list [--json]
 xanax attach <id>                        # reattach to a live session
 xanax resume <id>                        # reattach, or relaunch a dead one natively
