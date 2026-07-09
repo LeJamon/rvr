@@ -358,9 +358,9 @@ branch = "6"
 [keys]
 up = ["up", "k"]
 down = ["down", "j"]
-remove = ["ctrl+k"]              # live sessions ask for this key a second time
+remove = ["ctrl+x"]              # live sessions ask for this key a second time
 filter = ["ctrl+f", "/"]
-# up, down, confirm, cancel, quit, open, resume, rename, preview, quit_list,
+# up, down, confirm, cancel, quit, open, resume, rename, logs, preview, quit_list,
 # launch_attach, harness_picker, add_harness, set_default, modify_harness,
 # toggle_search, form_next, form_prev — all remappable the same way.
 
@@ -406,6 +406,7 @@ xanax list [--json]
 xanax attach <id-or-prefix>
 xanax resume <id-or-prefix> # reattach if alive, else native-resume relaunch (D3)
 xanax kill   <id-or-prefix>
+xanax logs   <id-or-prefix> [-f] # print or follow the raw session output
 xanax config                # print resolved config + paths
 xanax _supervise <id>       # hidden; internal supervisor entrypoint
 ```
@@ -420,8 +421,8 @@ Two layers, both driven by the arrow keys. `←` always means "back / up one lev
 
 - Bubble Tea full-screen app. Sessions grouped by state, most actionable first:
   **Needs input** → **Running** → **Completed** → **Cancelled** → **Failed**.
-- Each row: status glyph, title, harness, repo name, relative age, and (for waiting
-  sessions) the status detail.
+- Each row: status glyph, title, short session ID, harness, repo name, relative
+  age, and (for waiting sessions) the status detail.
 The sessions and the **prompt box** form one navigable column; the prompt box is the
 last row. `↑`/`↓` move the selection. `k`/`j` are vim-style aliases while a
 session row is selected, and type normally in the prompt box. The selected row is
@@ -443,11 +444,13 @@ not the selected row.
   scales to any number of harnesses. The composer label always names the harness the
   next session will use. `↑` moves up into the sessions.
 - **A session selected:** you are not typing, so action keys act on it — `→`/`Enter`
-  open the live window, `Ctrl+K` removes it (press `Ctrl+K` again first for live
-  sessions, so a live harness is not killed by one keypress), `r` resumes, `e`
-  **renames** (a xanax-only UI label; never touches the harness's own session), `s`
-  opens **settings** (the keybindings editor, below), and `↓`/`j` returns to the
-  prompt box. `Ctrl+C` always quits.
+  open a live window, or inspect stored logs for a terminal session without
+  relaunching it. `l` shows the stored log, `space` toggles a live peek and falls
+  back to the stored log for terminal sessions, `Ctrl+X` removes it (press
+  `Ctrl+X` again first for live sessions, so a live harness is not killed by one
+  keypress), `r` resumes, `e` **renames** (a xanax-only UI label; never touches the
+  harness's own session), `s` opens **settings** (the keybindings editor, below),
+  and `↓`/`j` returns to the prompt box. `Ctrl+C` always quits.
 - **Rename** opens an inline single-line editor pre-filled with the current title;
   Enter saves to the `sessions.title` column, Esc cancels.
 - Every dashboard key above is a default, not a hard-coded binding: the `[keys]`
@@ -460,7 +463,7 @@ not the selected row.
   the harness picker — listing every action with its current keys. `↑`/`↓` move and
   Enter starts a capture for the highlighted action; then press one or more keys
   (each added once) and Enter again to save them — so you can bind aliases like `x`
-  and `ctrl+k` together — or Esc to cancel. The binding is written to the `[keys]`
+  and `ctrl+x` together — or Esc to cancel. The binding is written to the `[keys]`
   table and takes effect immediately; Esc in the list closes the editor. It edits
   the same file `[keys]` documents, so changes made here and by hand are one and the
   same. Enter, Esc and the quit key drive the capture itself, so binding an action
@@ -482,9 +485,10 @@ passthrough is total, stepping back out needs a key neither harness binds:
 
 The dashboard enters interact mode by shelling out to `xanax attach <id>` via Bubble
 Tea's process exec, so the attach client owns the whole terminal and hands it back
-cleanly on `ctrl+\` — no input reader leaks back into the dashboard. If the session's
-supervisor is gone but a harness session ref was captured, opening it resumes
-natively instead.
+cleanly on `ctrl+\` — no input reader leaks back into the dashboard. If the
+supervisor is gone because the session reached a terminal state, opening it shows a
+read-only rendered excerpt of the stored raw log. Explicit `r` / `xanax resume`
+keeps the native relaunch path for resumable terminal sessions.
 
 `xanax attach <id>` from a plain shell is the same client, standalone; `ctrl+\`
 detaches and exits the process.
