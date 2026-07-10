@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"rvr/internal/attach"
-	"rvr/internal/session"
+	"github.com/LeJamon/xanax/internal/attach"
+	"github.com/LeJamon/xanax/internal/session"
 )
 
 func newKillCmd() *cobra.Command {

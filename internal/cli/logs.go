@@ -9,9 +9,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"rvr/internal/attach"
-	"rvr/internal/session"
-	"rvr/internal/store"
+	"github.com/LeJamon/xanax/internal/attach"
+	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/xanax/internal/store"
 )
 
 const logFollowPollInterval = 300 * time.Millisecond

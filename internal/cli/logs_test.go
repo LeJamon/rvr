@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"rvr/internal/config"
-	"rvr/internal/session"
-	"rvr/internal/store"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/xanax/internal/store"
 )
 
 func TestFollowRawLogExitsAfterTerminalSessionDrains(t *testing.T) {

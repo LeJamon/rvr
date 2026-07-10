@@ -11,7 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"xanax/internal/session"
+	"github.com/LeJamon/xanax/internal/session"
 )
 
 func newListCmd() *cobra.Command {

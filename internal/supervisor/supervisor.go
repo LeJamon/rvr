@@ -6,6 +6,7 @@ package supervisor
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -18,13 +19,13 @@ import (
 
 	"github.com/creack/pty"
 
-	"rvr/internal/adapter"
-	"rvr/internal/config"
-	"rvr/internal/notify"
-	"rvr/internal/ringbuf"
-	"rvr/internal/session"
-	"rvr/internal/store"
-	"rvr/internal/wire"
+	"github.com/LeJamon/xanax/internal/adapter"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/notify"
+	"github.com/LeJamon/xanax/internal/ringbuf"
+	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/xanax/internal/store"
+	"github.com/LeJamon/xanax/internal/wire"
 )
 
 const (
@@ -33,6 +34,10 @@ const (
 	killGrace     = 5 * time.Second
 	refPollPeriod = 2 * time.Second
 )
+
+// ErrAlreadySupervised means another process owns this session's supervisor
+// lease. The losing process must exit without changing the session record.
+var ErrAlreadySupervised = errors.New("session already has a supervisor")
 
 // Options configures a supervisor run.
 type Options struct {
@@ -63,6 +68,8 @@ type Supervisor struct {
 	hub    *hub
 
 	listener net.Listener
+	owner    *os.File
+	clientWG sync.WaitGroup
 
 	sizeMu   sync.Mutex
 	curRows  uint16
@@ -116,6 +123,14 @@ func Run(opts Options) (int, error) {
 
 func (s *Supervisor) run() (int, error) {
 	sess := s.opts.Session
+	if err := s.acquireOwnership(); err != nil {
+		if errors.Is(err, ErrAlreadySupervised) {
+			return 0, err
+		}
+		s.fail("acquire supervisor ownership failed: " + err.Error())
+		return 1, err
+	}
+	defer s.releaseOwnership()
 
 	a, err := adapter.New(sess, s.opts.Harness, adapter.Deps{Paths: s.opts.Paths, Logger: s.log})
 	if err != nil {
@@ -195,6 +210,7 @@ func (s *Supervisor) run() (int, error) {
 		lastKind:        s.stateInfo.last,
 	})
 	s.finish(final, exitCode)
+	s.clientWG.Wait()
 	return exitCode, nil
 }
 
@@ -294,7 +310,11 @@ func (s *Supervisor) acceptClients() {
 		if err != nil {
 			return
 		}
-		go s.serveClient(newClient(conn))
+		s.clientWG.Add(1)
+		go func() {
+			defer s.clientWG.Done()
+			s.serveClient(newClient(conn))
+		}()
 	}
 }
 
@@ -311,6 +331,7 @@ func (s *Supervisor) serveClient(cl *client) {
 	if firstErr == nil && first.Type == wire.TypeSnapshotReq {
 		var r wire.Resize
 		_ = first.DecodeJSON(&r)
+		_ = cl.conn.SetWriteDeadline(time.Now().Add(exitFlushTimeout))
 		_ = wire.Write(cl.conn, wire.TypeSnapshot, []byte(s.hub.preview(int(r.Rows), int(r.Cols))))
 		cl.close() // peek is never registered as a client
 		return
@@ -532,10 +553,37 @@ func (s *Supervisor) socketPath() string {
 	return filepath.Join(s.opts.Paths.SocketDir, s.opts.Session.ID+".sock")
 }
 
-func (s *Supervisor) listen() error {
+func (s *Supervisor) ownershipPath() string { return s.socketPath() + ".lock" }
+
+func (s *Supervisor) acquireOwnership() error {
 	if err := os.MkdirAll(s.opts.Paths.SocketDir, 0o700); err != nil {
 		return err
 	}
+	f, err := os.OpenFile(s.ownershipPath(), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return fmt.Errorf("%w: %s", ErrAlreadySupervised, s.opts.Session.ID)
+		}
+		return fmt.Errorf("lock supervisor lease: %w", err)
+	}
+	s.owner = f
+	return nil
+}
+
+func (s *Supervisor) releaseOwnership() {
+	if s.owner == nil {
+		return
+	}
+	_ = syscall.Flock(int(s.owner.Fd()), syscall.LOCK_UN)
+	_ = s.owner.Close()
+	s.owner = nil
+}
+
+func (s *Supervisor) listen() error {
 	path := s.socketPath()
 	_ = os.Remove(path)
 	l, err := net.Listen("unix", path)

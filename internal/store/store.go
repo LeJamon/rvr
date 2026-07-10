@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -12,9 +13,10 @@ import (
 	"strconv"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 
-	"rvr/internal/session"
+	"github.com/LeJamon/xanax/internal/session"
 )
 
 var (
@@ -79,28 +81,61 @@ func Open(path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)", path)
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 	s := &Store{db: db}
-	if err := s.migrate(); err != nil {
+	if err := s.migrateWithRetry(5 * time.Second); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
 	return s, nil
 }
 
+func (s *Store) migrateWithRetry(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	delay := 10 * time.Millisecond
+	for {
+		err := s.migrate()
+		if err == nil || !isSQLiteBusy(err) || time.Now().Add(delay).After(deadline) {
+			return err
+		}
+		time.Sleep(delay)
+		delay = min(delay*2, 200*time.Millisecond)
+	}
+}
+
+func isSQLiteBusy(err error) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code()&0xff == sqlite3.SQLITE_BUSY
+}
+
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) migrate() error {
-	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`); err != nil {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`); err != nil {
 		return err
 	}
 	version := 0
 	var raw string
-	err := s.db.QueryRow(`SELECT value FROM settings WHERE key = 'schema_version'`).Scan(&raw)
+	err = conn.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = 'schema_version'`).Scan(&raw)
 	switch {
 	case err == nil:
 		version, err = strconv.Atoi(raw)
@@ -115,26 +150,21 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("database schema version %d is newer than this rvr build (max %d)", version, len(migrations))
 	}
 	for i := version; i < len(migrations); i++ {
-		tx, err := s.db.Begin()
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(migrations[i]); err != nil {
-			tx.Rollback()
+		if _, err := conn.ExecContext(ctx, migrations[i]); err != nil {
 			return fmt.Errorf("migration %d: %w", i+1, err)
 		}
-		if _, err := tx.Exec(
+		if _, err := conn.ExecContext(ctx,
 			`INSERT INTO settings (key, value) VALUES ('schema_version', ?)
 			 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 			strconv.Itoa(i+1),
 		); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
 			return err
 		}
 	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return err
+	}
+	committed = true
 	return nil
 }
 

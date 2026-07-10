@@ -3,7 +3,7 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
-	"rvr/internal/attach"
+	"github.com/LeJamon/xanax/internal/attach"
 )
 
 func newAttachCmd() *cobra.Command {

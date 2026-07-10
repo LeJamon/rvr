@@ -10,6 +10,7 @@ type Status string
 const (
 	StatusStarting  Status = "starting"
 	StatusRunning   Status = "running"
+	StatusIdle      Status = "idle"
 	StatusWaiting   Status = "waiting"
 	StatusCompleted Status = "completed"
 	StatusFailed    Status = "failed"
@@ -19,7 +20,7 @@ const (
 // Live reports whether the session is expected to have a running supervisor.
 func (s Status) Live() bool {
 	switch s {
-	case StatusStarting, StatusRunning, StatusWaiting:
+	case StatusStarting, StatusRunning, StatusIdle, StatusWaiting:
 		return true
 	}
 	return false

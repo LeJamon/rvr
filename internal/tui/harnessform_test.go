@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"rvr/internal/config"
+	"github.com/LeJamon/xanax/internal/config"
 )
 
 func formModel(t *testing.T) (model, string) {

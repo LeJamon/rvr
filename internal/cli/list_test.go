@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"xanax/internal/config"
-	"xanax/internal/session"
-	"xanax/internal/store"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/xanax/internal/store"
 )
 
 func TestListShowsFailureDetailAndExitCode(t *testing.T) {

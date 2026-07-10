@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"rvr/internal/config"
-	"rvr/internal/session"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/session"
 )
 
 // piAdapter launches the pi coding agent's TUI and observes its state through

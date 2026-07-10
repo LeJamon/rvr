@@ -9,7 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"rvr/internal/config"
+	"github.com/LeJamon/xanax/internal/config"
 )
 
 // openSettings opens the keybindings editor over the current view. It is reached

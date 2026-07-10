@@ -3,8 +3,8 @@ package adapter
 import (
 	"testing"
 
-	"rvr/internal/config"
-	"rvr/internal/session"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/session"
 )
 
 // The supervisor calls adapter.Close() twice on the happy path — once

@@ -15,9 +15,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"rvr/internal/config"
-	"rvr/internal/session"
-	"rvr/internal/store"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/xanax/internal/store"
 )
 
 func newTestModel(sessions []*session.Session) model {
@@ -62,8 +62,6 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlX}
 	case "ctrl+k":
 		return tea.KeyMsg{Type: tea.KeyCtrlK}
-	case "ctrl+x":
-		return tea.KeyMsg{Type: tea.KeyCtrlX}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
 	case "space": // bubbletea encodes the spacebar as KeySpace carrying the rune

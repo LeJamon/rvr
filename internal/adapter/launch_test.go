@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"rvr/internal/config"
-	"rvr/internal/session"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/session"
 )
 
 func testDeps(t *testing.T) Deps {

@@ -10,10 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"rvr/internal/attach"
-	"rvr/internal/config"
-	"rvr/internal/session"
-	"rvr/internal/store"
+	"github.com/LeJamon/xanax/internal/attach"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/xanax/internal/store"
 )
 
 // socketPath is the unix socket for a session's supervisor.

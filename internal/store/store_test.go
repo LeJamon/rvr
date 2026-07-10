@@ -3,10 +3,11 @@ package store_test
 import (
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 
-	"rvr/internal/session"
-	"rvr/internal/store"
+	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/xanax/internal/store"
 )
 
 func openTemp(t *testing.T) *store.Store {
@@ -285,5 +286,42 @@ func TestReopenAppliesMigrationsOnce(t *testing.T) {
 	defer st2.Close()
 	if _, err := st2.GetSession("44444444"); err != nil {
 		t.Errorf("data lost across reopen: %v", err)
+	}
+}
+
+func TestConcurrentOpenSerializesFirstMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rvr.db")
+	const workers = 16
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			st, err := store.Open(path)
+			if err == nil {
+				err = st.Close()
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Open: %v", err)
+		}
+	}
+
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("final Open: %v", err)
+	}
+	defer st.Close()
+	if err := st.CreateSession(sample("after-concurrent-open")); err != nil {
+		t.Fatalf("CreateSession after concurrent migration: %v", err)
 	}
 }

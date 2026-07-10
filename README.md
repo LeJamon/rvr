@@ -11,19 +11,27 @@ stays the harness's job. See [`SPEC.md`](SPEC.md) for the full v1 design.
 
 ## Status
 
-MVP core. Works end-to-end with any PTY CLI via the generic adapter; native
-adapters for opencode and pi are implemented against their current APIs (see
-[`tasks/todo.md`](tasks/todo.md) for what's verified vs. pending live testing).
+Beta. The core session lifecycle, terminal attach/replay, persistence, native
+adapter contracts, and generic PTY path are covered by automated tests on macOS
+and Linux. Native harness APIs move quickly; see the compatibility matrix below
+for the exact integration and fallback behavior.
 
 ## Install
 
-Requires Go 1.24+.
+Tagged releases publish checksummed archives for macOS and Linux on amd64 and
+arm64 from [GitHub Releases](https://github.com/LeJamon/xanax/releases).
+
+With Go 1.26.5 or newer:
+
+```sh
+go install github.com/LeJamon/xanax/cmd/rvr@latest
+```
+
+Or build the current checkout:
 
 ```sh
 go build -o rvr ./cmd/rvr
 ```
-
-Runs on macOS and Linux.
 
 ## Usage
 
@@ -75,7 +83,21 @@ the prompt box. The selected row is framed with accent-colored top/bottom rules.
 Sessions survive closing the dashboard and even a reboot: on the next launch, rvr
 auto-resumes interrupted sessions via the harness's native resume (like Claude
 Code's background agents). Finished sessions do not relaunch on `Enter`; use `r`
-  or `rvr resume <id>` when you explicitly want to resume one.
+or `rvr resume <id>` when you explicitly want to resume one.
+
+## Compatibility
+
+| Harness | Integration | State detection | Resume behavior |
+|---|---|---|---|
+| opencode | Native adapter, local SSE API | Busy, idle, permission/input, error | Exact captured session ID |
+| pi | Native adapter, embedded hook | Agent busy/idle lifecycle | Exact captured session file |
+| codex | Generic full-screen adapter | Output pattern plus non-actionable idle timeout | `codex resume --last` |
+| Other PTY CLIs | Configured generic adapter | Optional waiting pattern and idle timeout | Configured `resume_args` |
+
+If a native side channel is unavailable or its upstream API changes, the
+harness keeps running and rvr degrades to process-level running/exited state.
+CI tests adapter contracts and terminal behavior but does not install external
+harness binaries; release notes should record any live-tested harness versions.
 
 ## Configuration
 
@@ -104,7 +126,7 @@ command           = "codex"
 full_screen       = true                  # attach uses a screen snapshot, not raw replay
 prompt_positional = true                  # codex "<prompt>" starts a session with it
 resume_args       = ["resume", "--last"]  # reattach to the most recent session
-idle_timeout      = 120                   # no native state; mark "waiting" when idle
+idle_timeout      = 120                   # no native state; mark non-actionable "idle"
 
 # Optional TUI colors — ANSI palette index ("0"–"255") or hex ("#rgb"/"#rrggbb").
 # Any omitted field keeps its default; see `rvr config` for the full set.
@@ -145,6 +167,10 @@ internal/tui         Bubble Tea dashboard
 ## Development
 
 ```sh
-go test ./...
+go test -race ./...
 go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ```
+
+Release tags matching `v*` are built through GoReleaser. Run `goreleaser check`
+before changing release configuration.

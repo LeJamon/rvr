@@ -5,18 +5,38 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"rvr/internal/config"
-	"rvr/internal/store"
-	"rvr/internal/tui"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/store"
+	"github.com/LeJamon/xanax/internal/tui"
 )
 
-// version is the rvr release, shown by `--version` and in the dashboard header.
-const version = "0.1.0-dev"
+// version is injected by release builds. Go-installed builds fall back to the
+// module version embedded by the toolchain; source builds report 0.1.0-dev.
+var version = "0.1.0-dev"
+
+func resolvedVersion() string {
+	moduleVersion := ""
+	if info, ok := debug.ReadBuildInfo(); ok {
+		moduleVersion = info.Main.Version
+	}
+	return selectVersion(version, moduleVersion)
+}
+
+func selectVersion(injected, moduleVersion string) string {
+	if injected != "" && injected != "0.1.0-dev" {
+		return strings.TrimPrefix(injected, "v")
+	}
+	if moduleVersion != "" && moduleVersion != "(devel)" {
+		return strings.TrimPrefix(moduleVersion, "v")
+	}
+	return "0.1.0-dev"
+}
 
 // Execute runs the root command and returns its error for main to report.
 func Execute() error {
@@ -24,6 +44,7 @@ func Execute() error {
 }
 
 func newRootCmd() *cobra.Command {
+	release := resolvedVersion()
 	root := &cobra.Command{
 		Use:   "rvr [path]",
 		Short: "Session manager for autonomous AI coding agents",
@@ -32,7 +53,7 @@ sessions (opencode, pi, ...) so they keep running when your terminal doesn't.
 
 With no argument the dashboard shows every session. Given a path, it scopes to
 sessions whose repository is under that path and launches new ones there.`,
-		Version:                    version,
+		Version:                    release,
 		Args:                       cobra.MaximumNArgs(1),
 		SuggestionsMinimumDistance: 2,
 		SilenceUsage:               true,
@@ -154,6 +175,6 @@ func runDashboard(scope string) error {
 		SocketDir:  e.paths.SocketDir,
 		ConfigPath: e.paths.ConfigFile,
 		Scope:      scope,
-		Version:    version,
+		Version:    resolvedVersion(),
 	})
 }

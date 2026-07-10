@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"rvr/internal/wire"
+	"github.com/LeJamon/xanax/internal/wire"
 )
 
 // TestRunResetsTerminalModesOnDetach verifies the client writes the

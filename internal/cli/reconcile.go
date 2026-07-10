@@ -3,9 +3,9 @@ package cli
 import (
 	"log/slog"
 
-	"rvr/internal/attach"
-	"rvr/internal/session"
-	"rvr/internal/store"
+	"github.com/LeJamon/xanax/internal/attach"
+	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/xanax/internal/store"
 )
 
 // reconcile brings the store in line with reality and, when auto_resume is on,
@@ -29,21 +29,21 @@ func (e *env) reconcile(st *store.Store) ([]string, error) {
 		// Supervisor is gone.
 		if _, ok := e.cfg.Harnesses[s.Harness]; !ok {
 			detail := missingHarnessDetail(s.Harness)
-			st.SetStatus(s.ID, session.StatusFailed, detail)
+			st.FinishWithDetail(s.ID, session.StatusFailed, 1, detail)
 			st.RecordEvent(s.ID, "harness_missing", map[string]any{"harness": s.Harness})
 			continue
 		}
 		if e.cfg.AutoResume && e.canResume(s) {
 			if _, err := e.spawnSupervisor(s.ID, true); err != nil {
 				slog.Warn("auto-resume failed", "session", s.ID, "err", err)
-				st.SetStatus(s.ID, session.StatusFailed, "auto-resume failed")
+				st.FinishWithDetail(s.ID, session.StatusFailed, 1, "auto-resume failed")
 				continue
 			}
 			st.RecordEvent(s.ID, "resumed", map[string]any{"auto": true})
 			resumed = append(resumed, s.ID)
 			continue
 		}
-		st.SetStatus(s.ID, session.StatusFailed, "orphaned")
+		st.FinishWithDetail(s.ID, session.StatusFailed, 1, "orphaned")
 		st.RecordEvent(s.ID, "orphaned", nil)
 	}
 	return resumed, nil

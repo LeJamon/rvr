@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"rvr/internal/session"
-	"rvr/internal/supervisor"
+	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/xanax/internal/supervisor"
 )
 
 func newSuperviseCmd() *cobra.Command {
@@ -37,11 +37,8 @@ func newSuperviseCmd() *cobra.Command {
 			harness, ok := e.cfg.Harnesses[sess.Harness]
 			if !ok {
 				detail := missingHarnessDetail(sess.Harness)
-				if err := st.SetStatus(sess.ID, session.StatusFailed, detail); err != nil {
-					return err
-				}
 				st.RecordEvent(sess.ID, "error", map[string]any{"message": detail})
-				if err := st.Finish(sess.ID, session.StatusFailed, 1); err != nil {
+				if err := st.FinishWithDetail(sess.ID, session.StatusFailed, 1, detail); err != nil {
 					return err
 				}
 				return errors.New(detail)
@@ -59,7 +56,7 @@ func newSuperviseCmd() *cobra.Command {
 				Resume:  resume,
 				Notify:  e.cfg.Notifications,
 			})
-			if err != nil {
+			if err != nil && !errors.Is(err, supervisor.ErrAlreadySupervised) {
 				logger.Error("supervisor exited with error", "err", err)
 			}
 			os.Exit(code)

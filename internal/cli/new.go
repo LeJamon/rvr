@@ -12,8 +12,8 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"rvr/internal/attach"
-	"rvr/internal/session"
+	"github.com/LeJamon/xanax/internal/attach"
+	"github.com/LeJamon/xanax/internal/session"
 )
 
 func newNewCmd() *cobra.Command {

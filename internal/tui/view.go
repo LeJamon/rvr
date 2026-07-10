@@ -8,8 +8,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"rvr/internal/config"
-	"rvr/internal/session"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/session"
 )
 
 // pickerModalWidth returns the modal's content width (the columns between the
@@ -361,7 +361,7 @@ func (m model) header() string {
 // non-empty, so the header always reconciles with the list below without
 // cluttering the common case.
 func (m model) counts() string {
-	var c [6]int // indexed by groupRank: waiting, running, completed, cancelled, failed, other
+	var c [7]int // indexed by groupRank: waiting, idle, running, completed, cancelled, failed, other
 	for _, s := range m.sessions {
 		r := groupRank(s.Status)
 		if r >= len(c) {
@@ -374,17 +374,20 @@ func (m model) counts() string {
 			mutedStyle.Render(" "+label)
 	}
 	dot := mutedStyle.Render("  ·  ")
-	out := seg(c[0], colWaiting, "awaiting input") + dot +
-		seg(c[1], colRunning, "working") + dot +
-		seg(c[2], colCompleted, "completed")
-	if c[3] > 0 {
-		out += dot + seg(c[3], colCancelled, "cancelled")
+	out := seg(c[0], colWaiting, "awaiting input")
+	if c[1] > 0 {
+		out += dot + seg(c[1], colMuted, "idle")
 	}
+	out += dot + seg(c[2], colRunning, "working") + dot +
+		seg(c[3], colCompleted, "completed")
 	if c[4] > 0 {
-		out += dot + seg(c[4], colFailed, "failed")
+		out += dot + seg(c[4], colCancelled, "cancelled")
 	}
 	if c[5] > 0 {
-		out += dot + seg(c[5], colMuted, "other")
+		out += dot + seg(c[5], colFailed, "failed")
+	}
+	if c[6] > 0 {
+		out += dot + seg(c[6], colMuted, "other")
 	}
 	return out
 }

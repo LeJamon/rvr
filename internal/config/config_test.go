@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"rvr/internal/config"
-	"rvr/internal/session"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/session"
 )
 
 func writeConfig(t *testing.T, content string) string {

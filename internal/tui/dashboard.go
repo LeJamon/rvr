@@ -19,11 +19,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"rvr/internal/attach"
-	"rvr/internal/config"
-	"rvr/internal/session"
-	"rvr/internal/store"
-	"rvr/internal/termview"
+	"github.com/LeJamon/xanax/internal/attach"
+	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/xanax/internal/store"
+	"github.com/LeJamon/xanax/internal/termview"
 )
 
 // Deps are the services the dashboard needs from the CLI layer.
@@ -1122,16 +1122,18 @@ func groupRank(s session.Status) int {
 	switch s {
 	case session.StatusWaiting:
 		return 0
-	case session.StatusRunning, session.StatusStarting:
+	case session.StatusIdle:
 		return 1
-	case session.StatusCompleted:
+	case session.StatusRunning, session.StatusStarting:
 		return 2
-	case session.StatusCancelled:
+	case session.StatusCompleted:
 		return 3
-	case session.StatusFailed:
+	case session.StatusCancelled:
 		return 4
-	default:
+	case session.StatusFailed:
 		return 5
+	default:
+		return 6
 	}
 }
 
@@ -1140,12 +1142,14 @@ func groupLabel(rank int) string {
 	case 0:
 		return "Needs input"
 	case 1:
-		return "Running"
+		return "Idle"
 	case 2:
-		return "Completed"
+		return "Running"
 	case 3:
-		return "Cancelled"
+		return "Completed"
 	case 4:
+		return "Cancelled"
+	case 5:
 		return "Failed"
 	default:
 		return "Other"
