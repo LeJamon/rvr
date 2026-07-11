@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/LeJamon/xanax/internal/session"
-	"github.com/LeJamon/xanax/internal/store"
+	"github.com/LeJamon/rvr/internal/session"
+	"github.com/LeJamon/rvr/internal/store"
 )
 
 func openTemp(t *testing.T) *store.Store {

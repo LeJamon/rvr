@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/xanax/internal/config"
-	"github.com/LeJamon/xanax/internal/session"
-	"github.com/LeJamon/xanax/internal/store"
-	"github.com/LeJamon/xanax/internal/supervisor"
-	"github.com/LeJamon/xanax/internal/wire"
+	"github.com/LeJamon/rvr/internal/config"
+	"github.com/LeJamon/rvr/internal/session"
+	"github.com/LeJamon/rvr/internal/store"
+	"github.com/LeJamon/rvr/internal/supervisor"
+	"github.com/LeJamon/rvr/internal/wire"
 )
 
 func testPaths(t *testing.T) config.Paths {

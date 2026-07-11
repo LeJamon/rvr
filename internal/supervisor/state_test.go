@@ -3,8 +3,8 @@ package supervisor
 import (
 	"testing"
 
-	"github.com/LeJamon/xanax/internal/adapter"
-	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/rvr/internal/adapter"
+	"github.com/LeJamon/rvr/internal/session"
 )
 
 func TestMapState(t *testing.T) {

@@ -8,8 +8,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/LeJamon/xanax/internal/config"
-	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/rvr/internal/config"
+	"github.com/LeJamon/rvr/internal/session"
 )
 
 // pickerModalWidth returns the modal's content width (the columns between the

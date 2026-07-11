@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/LeJamon/xanax/internal/session"
-	"github.com/LeJamon/xanax/internal/supervisor"
+	"github.com/LeJamon/rvr/internal/session"
+	"github.com/LeJamon/rvr/internal/supervisor"
 )
 
 func newSuperviseCmd() *cobra.Command {

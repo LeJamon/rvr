@@ -5,9 +5,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/LeJamon/xanax/internal/attach"
-	"github.com/LeJamon/xanax/internal/session"
-	"github.com/LeJamon/xanax/internal/store"
+	"github.com/LeJamon/rvr/internal/attach"
+	"github.com/LeJamon/rvr/internal/session"
+	"github.com/LeJamon/rvr/internal/store"
 )
 
 type removeTarget struct {

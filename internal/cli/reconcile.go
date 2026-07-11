@@ -3,9 +3,9 @@ package cli
 import (
 	"log/slog"
 
-	"github.com/LeJamon/xanax/internal/attach"
-	"github.com/LeJamon/xanax/internal/session"
-	"github.com/LeJamon/xanax/internal/store"
+	"github.com/LeJamon/rvr/internal/attach"
+	"github.com/LeJamon/rvr/internal/session"
+	"github.com/LeJamon/rvr/internal/store"
 )
 
 // reconcile brings the store in line with reality and, when auto_resume is on,

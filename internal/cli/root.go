@@ -11,9 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/LeJamon/xanax/internal/config"
-	"github.com/LeJamon/xanax/internal/store"
-	"github.com/LeJamon/xanax/internal/tui"
+	"github.com/LeJamon/rvr/internal/config"
+	"github.com/LeJamon/rvr/internal/store"
+	"github.com/LeJamon/rvr/internal/tui"
 )
 
 // version is injected by release builds. Go-installed builds fall back to the

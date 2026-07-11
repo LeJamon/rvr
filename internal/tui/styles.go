@@ -3,8 +3,8 @@ package tui
 import (
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/LeJamon/xanax/internal/config"
-	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/rvr/internal/config"
+	"github.com/LeJamon/rvr/internal/session"
 )
 
 // Colors and styles are package-level and rebuilt from the configured theme by

@@ -5,7 +5,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/LeJamon/xanax/internal/config"
+	"github.com/LeJamon/rvr/internal/config"
 )
 
 // keys returns the resolved key bindings the dashboard dispatches through. It

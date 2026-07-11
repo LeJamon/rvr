@@ -16,7 +16,7 @@ import (
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 
-	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/rvr/internal/session"
 )
 
 var (

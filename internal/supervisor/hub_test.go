@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/xanax/internal/ringbuf"
-	"github.com/LeJamon/xanax/internal/wire"
+	"github.com/LeJamon/rvr/internal/ringbuf"
+	"github.com/LeJamon/rvr/internal/wire"
 )
 
 func TestBroadcastExitFlushesQueuedFramesInOrder(t *testing.T) {

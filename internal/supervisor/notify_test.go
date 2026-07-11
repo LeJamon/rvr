@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/LeJamon/xanax/internal/session"
-	"github.com/LeJamon/xanax/internal/wire"
+	"github.com/LeJamon/rvr/internal/session"
+	"github.com/LeJamon/rvr/internal/wire"
 )
 
 func silentLogger() *slog.Logger {

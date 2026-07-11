@@ -1,4 +1,4 @@
-module github.com/LeJamon/xanax
+module github.com/LeJamon/rvr
 
 go 1.26.5
 

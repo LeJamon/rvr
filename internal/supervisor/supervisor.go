@@ -19,13 +19,13 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/LeJamon/xanax/internal/adapter"
-	"github.com/LeJamon/xanax/internal/config"
-	"github.com/LeJamon/xanax/internal/notify"
-	"github.com/LeJamon/xanax/internal/ringbuf"
-	"github.com/LeJamon/xanax/internal/session"
-	"github.com/LeJamon/xanax/internal/store"
-	"github.com/LeJamon/xanax/internal/wire"
+	"github.com/LeJamon/rvr/internal/adapter"
+	"github.com/LeJamon/rvr/internal/config"
+	"github.com/LeJamon/rvr/internal/notify"
+	"github.com/LeJamon/rvr/internal/ringbuf"
+	"github.com/LeJamon/rvr/internal/session"
+	"github.com/LeJamon/rvr/internal/store"
+	"github.com/LeJamon/rvr/internal/wire"
 )
 
 const (

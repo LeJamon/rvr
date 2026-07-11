@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/rvr/internal/session"
 )
 
 // lineWidths returns the rendered (ANSI-aware) width of each line in s.

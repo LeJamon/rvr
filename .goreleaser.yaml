@@ -17,7 +17,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X github.com/LeJamon/xanax/internal/cli.version={{ .Version }}
+      - -s -w -X github.com/LeJamon/rvr/internal/cli.version={{ .Version }}
     mod_timestamp: '{{ .CommitTimestamp }}'
 
 archives:

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/LeJamon/xanax/internal/cli"
+	"github.com/LeJamon/rvr/internal/cli"
 )
 
 func main() {

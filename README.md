@@ -19,12 +19,12 @@ for the exact integration and fallback behavior.
 ## Install
 
 Tagged releases publish checksummed archives for macOS and Linux on amd64 and
-arm64 from [GitHub Releases](https://github.com/LeJamon/xanax/releases).
+arm64 from [GitHub Releases](https://github.com/LeJamon/rvr/releases).
 
 With Go 1.26.5 or newer:
 
 ```sh
-go install github.com/LeJamon/xanax/cmd/rvr@latest
+go install github.com/LeJamon/rvr/cmd/rvr@latest
 ```
 
 Or build the current checkout:

@@ -13,7 +13,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/rvr/internal/session"
 )
 
 // Adapter names accepted in harness configuration.

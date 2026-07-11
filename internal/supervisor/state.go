@@ -1,8 +1,8 @@
 package supervisor
 
 import (
-	"github.com/LeJamon/xanax/internal/adapter"
-	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/rvr/internal/adapter"
+	"github.com/LeJamon/rvr/internal/session"
 )
 
 // mapState maps a normalized adapter state event to a session status and

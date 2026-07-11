@@ -1,6 +1,6 @@
 package supervisor
 
-import "github.com/LeJamon/xanax/internal/session"
+import "github.com/LeJamon/rvr/internal/session"
 
 // notifyEvent describes a desktop notification to raise.
 type notifyEvent struct {

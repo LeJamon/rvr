@@ -10,8 +10,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/LeJamon/xanax/internal/config"
-	"github.com/LeJamon/xanax/internal/session"
+	"github.com/LeJamon/rvr/internal/config"
+	"github.com/LeJamon/rvr/internal/session"
 )
 
 // StateKind is a normalized agent state, harness-agnostic.
