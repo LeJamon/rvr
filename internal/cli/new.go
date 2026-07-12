@@ -146,6 +146,7 @@ func runAttach(e *env, id string) error {
 		SocketPath: e.socketPath(id),
 		ExitKey:    attach.ParseExitKey(e.cfg.InteractExitKey),
 	})
+	attach.ReportResult(res)
 	if err != nil {
 		return err
 	}

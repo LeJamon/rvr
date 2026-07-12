@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/LeJamon/rvr/internal/config"
 	"github.com/LeJamon/rvr/internal/session"
 	"github.com/LeJamon/rvr/internal/store"
+	"github.com/LeJamon/rvr/internal/supervisor"
 )
 
 func TestRmRemovesTerminalSession(t *testing.T) {
@@ -137,6 +139,42 @@ func TestPruneReportsNothingToDo(t *testing.T) {
 	}
 	if out != "No terminal sessions to prune.\n" {
 		t.Fatalf("output = %q", out)
+	}
+}
+
+func TestRmAndPruneRespectSocketlessSupervisorLease(t *testing.T) {
+	st := openCLIStore(t)
+	sess := createCLISession(t, st, "owned001-0000-0000-0000-000000000001", session.StatusCompleted)
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := supervisor.TryAcquireLease(filepath.Join(paths.SocketDir, sess.ID+".sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+
+	out, err := executeRoot(t, "rm", "owned001")
+	if err == nil || !strings.Contains(err.Error(), "has an active supervisor; use --force") {
+		t.Fatalf("rm error = %v, want force requirement for lease owner", err)
+	}
+	if out != "" {
+		t.Fatalf("rm output = %q, want none on refusal", out)
+	}
+	if _, err := st.GetSession(sess.ID); err != nil {
+		t.Fatalf("rm refusal deleted owned session: %v", err)
+	}
+
+	out, err = executeRoot(t, "prune")
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if out != "No terminal sessions to prune.\n" {
+		t.Fatalf("prune output = %q", out)
+	}
+	if _, err := st.GetSession(sess.ID); err != nil {
+		t.Fatalf("prune deleted owned session: %v", err)
 	}
 }
 

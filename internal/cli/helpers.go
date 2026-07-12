@@ -154,6 +154,7 @@ func (e *env) spawnSupervisor(id string, resume bool) (int, error) {
 		args = append(args, "--resume")
 	}
 	cmd := exec.Command(exe, args...)
+	cmd.Env = withoutEnv(os.Environ(), attach.ResultFDEnv)
 	cmd.Stdin = devnull
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -164,6 +165,17 @@ func (e *env) spawnSupervisor(id string, resume bool) (int, error) {
 	pid := cmd.Process.Pid
 	_ = cmd.Process.Release()
 	return pid, nil
+}
+
+func withoutEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // waitForSocket blocks until the session's supervisor is accepting, or timeout.

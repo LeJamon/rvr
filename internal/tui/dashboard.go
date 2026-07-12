@@ -5,12 +5,14 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/LeJamon/rvr/internal/attach"
 	"github.com/LeJamon/rvr/internal/config"
 	"github.com/LeJamon/rvr/internal/session"
+	"github.com/LeJamon/rvr/internal/sessionctl"
 	"github.com/LeJamon/rvr/internal/store"
 	"github.com/LeJamon/rvr/internal/termview"
 )
@@ -94,9 +97,13 @@ type model struct {
 	gitCache     map[string]gitInfo // live branch/PR per repo path
 	gitPollCount int                // gates the slower PR refresh
 
-	previewOn    bool   // preview panel open (space toggles it on the selected session)
-	previewText  string // last fetched preview of the selected session
-	previewLabel string
+	previewOn         bool   // preview panel open (space toggles it on the selected session)
+	previewText       string // last fetched preview of the selected session
+	previewLabel      string
+	previewMode       previewMode
+	previewGeneration uint64
+	previewPending    bool // one request is in flight; prevents overlapping raw-log replays
+	previewStatic     bool // terminal stored-log result is immutable and can be reused
 
 	attachAliveFn func(string) bool
 	attachKillFn  func(string) error
@@ -117,6 +124,13 @@ type model struct {
 
 const previewRows = 8
 
+type previewMode uint8
+
+const (
+	previewAuto previewMode = iota
+	previewStored
+)
+
 // harness returns the currently selected harness for new sessions.
 func (m model) harness() string {
 	if len(m.harnesses) == 0 {
@@ -135,8 +149,9 @@ type tickMsg struct{}
 // restorePrompt, when set, puts a would-be-lost prompt back in the composer
 // (a launch failed before the session captured it, so the user can retry).
 type actionDoneMsg struct {
-	status        string
-	restorePrompt string
+	status          string
+	restorePrompt   string
+	confirmRemoveID string
 }
 
 // Run starts the dashboard event loop.
@@ -305,6 +320,7 @@ func gitTickCmd() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		widthChanged := m.width != msg.Width
 		m.width, m.height = msg.Width, msg.Height
 		m.composer.SetWidth(max(20, msg.Width-2))
 		m.syncComposerHeight() // wrap width changed, so the row count may have too
@@ -312,36 +328,69 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.addingHarness {
 			m.syncFormWidths() // keep the form inputs sized to the (resized) modal
 		}
+		if widthChanged && m.previewOn {
+			m = m.resetPreview(m.previewMode)
+			return m.requestPreview()
+		}
 		return m, nil
 
 	case sessionsMsg:
 		firstLoad := m.gitCache == nil && len(msg.sessions) > 0
 		prevID := m.selectedID()
+		prevTerminal, hadPrev := false, false
+		var prevUpdated time.Time
+		if prev := m.current(); prev != nil {
+			prevTerminal, hadPrev = prev.Status.Terminal(), true
+			prevUpdated = prev.UpdatedAt
+		}
 		m.allSessions, m.err = msg.sessions, msg.err
 		m.sessions = filterSessions(m.allSessions, m.filter)
 		var selCmd tea.Cmd
 		m, selCmd = m.reselect(prevID)
 		m = m.closeMovedPreview(prevID)
 		m = m.clearStaleRemoveConfirm()
+		var preview tea.Cmd
+		if m.previewOn && hadPrev && m.selectedID() == prevID {
+			if current := m.current(); current != nil {
+				lifecycleChanged := current.Status.Terminal() != prevTerminal ||
+					(prevTerminal && current.Status.Terminal() && !current.UpdatedAt.Equal(prevUpdated))
+				if lifecycleChanged {
+					m = m.resetPreview(m.previewMode)
+					m, preview = m.requestPreview()
+				}
+			}
+		}
 		if firstLoad {
 			// Show branches promptly rather than waiting for the 5 s git tick
 			// (branches only — the slower gh PR lookup stays on the tick).
 			m.gitCache = make(map[string]gitInfo)
-			return m, tea.Batch(selCmd, gitPollCmd(uniqueRepos(m), false))
+			return m, tea.Batch(selCmd, gitPollCmd(uniqueRepos(m), false), preview)
+		}
+		if preview != nil {
+			return m, tea.Batch(selCmd, preview)
 		}
 		return m, selCmd
 
 	case tickMsg:
-		return m, tea.Batch(m.reload(), tickCmd(), m.previewCmd())
+		var preview tea.Cmd
+		m, preview = m.requestPreview()
+		return m, tea.Batch(m.reload(), tickCmd(), preview)
 
 	case previewMsg:
-		if m.previewOn && msg.id == m.selectedID() { // ignore stale results after moving or closing
+		// Only one preview command is ever in flight. A stale response releases
+		// that slot and immediately schedules the current generation, rather than
+		// overlapping a mode/width replacement with the old replay.
+		m.previewPending = false
+		if m.previewOn && msg.id == m.selectedID() &&
+			msg.generation == m.previewGeneration && msg.mode == m.previewMode {
 			m.previewText = msg.text
+			m.previewStatic = msg.static
 			if msg.label != "" {
 				m.previewLabel = msg.label
 			}
+			return m, nil
 		}
-		return m, nil
+		return m.requestPreview()
 
 	case gitTickMsg:
 		// Refresh PR numbers only every 12th tick (~60 s); branches every tick.
@@ -369,7 +418,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case actionDoneMsg:
 		m.status = msg.status
-		m.confirmRemoveID = ""
+		m.confirmRemoveID = msg.confirmRemoveID
 		// Put a would-be-lost prompt back, but only if the box is empty — a
 		// background launch stays interactive, so the user may have started
 		// typing something new we must not clobber.
@@ -500,10 +549,8 @@ func (m model) moveDown() (tea.Model, tea.Cmd) {
 // the peeked session) calls it directly. This keeps the preview from silently
 // jumping to a session the user did not peek.
 func (m model) closeMovedPreview(prevID string) model {
-	if m.selectedID() != prevID {
-		m.previewOn = false
-		m.previewText = ""
-		m.previewLabel = ""
+	if m.previewOn && m.selectedID() != prevID {
+		m = m.closePreview()
 	}
 	return m
 }
@@ -757,13 +804,14 @@ func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) confirmOrRemove(s *session.Session) (tea.Model, tea.Cmd) {
-	if m.removeNeedsConfirm(s) && m.confirmRemoveID != s.ID {
+	force := m.confirmRemoveID == s.ID
+	if m.removeNeedsConfirm(s) && !force {
 		m.confirmRemoveID = s.ID
 		m.status = "press " + keyHint(m.keys().Remove) + " again to kill and remove " + shortID(s.ID)
 		return m, nil
 	}
 	m.confirmRemoveID = ""
-	return m, m.execKillRemove(s)
+	return m, m.execKillRemove(s, force)
 }
 
 func (m model) removeNeedsConfirm(s *session.Session) bool {
@@ -837,41 +885,134 @@ func (m model) updateRenameKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // resume). Bubble Tea releases and restores the terminal around it.
 func (m model) execInteractive(sub string, arg string) tea.Cmd {
 	c := exec.Command(m.deps.SelfPath, sub, arg)
-	return tea.ExecProcess(c, func(err error) tea.Msg {
+	return execAttachProcess(c, func(err error, result attach.Result, reported bool) tea.Msg {
 		if err != nil {
 			return actionDoneMsg{status: fmt.Sprintf("%s failed: %v", sub, err)}
 		}
-		return actionDoneMsg{status: interactiveSuccessStatus(sub, arg)}
+		if reported {
+			return actionDoneMsg{status: m.reportedInteractiveStatus(sub, arg, result)}
+		}
+		return actionDoneMsg{status: interactiveReturnStatus(sub)}
 	})
 }
 
-func interactiveSuccessStatus(sub, id string) string {
-	switch sub {
-	case "attach", "resume":
-		return "detached from " + shortID(id) + " (still running)"
-	case "new":
-		return "detached from new session (still running)"
-	default:
-		return ""
+func execAttachProcess(
+	c *exec.Cmd,
+	done func(error, attach.Result, bool) tea.Msg,
+) tea.Cmd {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return tea.ExecProcess(c, func(runErr error) tea.Msg {
+			return done(runErr, attach.Disconnected, false)
+		})
 	}
+	fd := 3 + len(c.ExtraFiles)
+	c.ExtraFiles = append(c.ExtraFiles, writer)
+	c.Env = setProcessEnv(c.Env, attach.ResultFDEnv, strconv.Itoa(fd))
+	return tea.ExecProcess(c, func(runErr error) tea.Msg {
+		_ = writer.Close()
+		if runErr != nil {
+			_ = reader.Close()
+			return done(runErr, attach.Disconnected, false)
+		}
+		_ = reader.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		data := make([]byte, 32)
+		n, readErr := reader.Read(data)
+		_ = reader.Close()
+		result, reported := attach.ParseResult(data[:n])
+		reported = reported && (readErr == nil || n > 0)
+		return done(runErr, result, reported)
+	})
+}
+
+func setProcessEnv(env []string, key, value string) []string {
+	if env == nil {
+		env = os.Environ()
+	}
+	prefix := key + "="
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			out = append(out, entry)
+		}
+	}
+	return append(out, prefix+value)
+}
+
+func (m model) reportedInteractiveStatus(sub, id string, result attach.Result) string {
+	var sess *session.Session
+	if result == attach.SessionExited && id != "" && m.deps.Store != nil {
+		sess, _ = m.deps.Store.GetSession(id)
+	}
+	return interactiveAttachResultStatus(sub, id, result, sess)
+}
+
+func interactiveAttachResultStatus(sub, id string, result attach.Result, sess *session.Session) string {
+	switch result {
+	case attach.Detached:
+		if sub == "new" {
+			if id == "" {
+				return "detached from new session (still running)"
+			}
+			return "detached from new session " + shortID(id) + " (still running)"
+		}
+		return "detached from " + shortID(id) + " (still running)"
+	case attach.SessionExited:
+		if sess != nil && sess.Status.Terminal() {
+			if sub == "new" {
+				return "new session " + shortID(id) + " ended (" + string(sess.Status) + ")"
+			}
+			return "session " + shortID(id) + " ended (" + string(sess.Status) + ")"
+		}
+		if sub == "new" {
+			if id == "" {
+				return "new session ended"
+			}
+			return "new session " + shortID(id) + " ended"
+		}
+		return "session " + shortID(id) + " ended"
+	case attach.Disconnected:
+		if sub == "new" {
+			if id == "" {
+				return "disconnected from new session"
+			}
+			return "disconnected from new session " + shortID(id)
+		}
+		return "disconnected from " + shortID(id)
+	default:
+		return "returned from " + sub
+	}
+}
+
+func interactiveReturnStatus(sub string) string {
+	if sub == "new" {
+		return "returned from new session"
+	}
+	return "returned from " + sub
 }
 
 // execKillRemove terminates a live session and deletes it from the store, so it
 // disappears from the dashboard.
-func (m model) execKillRemove(s *session.Session) tea.Cmd {
+func (m model) execKillRemove(s *session.Session, force bool) tea.Cmd {
 	id := s.ID
-	sock := filepath.Join(m.deps.SocketDir, id+".sock")
 	return func() tea.Msg {
-		alive := m.attachAlive(sock)
-		if alive {
-			if err := m.attachKill(sock); err != nil {
-				return actionDoneMsg{status: "remove failed: kill " + shortID(id) + ": " + err.Error()}
+		results, err := sessionctl.Remove(m.deps.Store, []string{id}, sessionctl.Options{
+			SocketDir: m.deps.SocketDir,
+			Force:     force,
+			Alive:     m.attachAlive,
+			Kill:      m.attachKill,
+		})
+		if err != nil {
+			var active *sessionctl.ActiveError
+			if errors.As(err, &active) {
+				return actionDoneMsg{
+					status:          "press " + keyHint(m.keys().Remove) + " again to kill and remove " + shortID(id),
+					confirmRemoveID: id,
+				}
 			}
-		}
-		if err := m.deps.Store.DeleteSession(id); err != nil {
 			return actionDoneMsg{status: "remove failed: " + err.Error()}
 		}
-		if alive {
+		if len(results) == 1 && results[0].Killed {
 			return actionDoneMsg{status: "killed and removed " + shortID(id)}
 		}
 		return actionDoneMsg{status: "removed " + shortID(id)}
@@ -908,13 +1049,57 @@ func (m model) execNewBackground(prompt string) tea.Cmd {
 // execNewAttach launches a new session and drops straight into the harness's
 // live window (its own input, native /command and @file syntax included).
 func (m model) execNewAttach(prompt string) tea.Cmd {
+	known, tracking := m.snapshotSessionIDs()
 	c := exec.Command(m.deps.SelfPath, newSessionArgs(m.harness(), m.deps.Scope, prompt, true)...)
-	return tea.ExecProcess(c, func(err error) tea.Msg {
+	return execAttachProcess(c, func(err error, result attach.Result, reported bool) tea.Msg {
 		if err != nil {
 			return actionDoneMsg{status: "launch failed: " + err.Error(), restorePrompt: prompt}
 		}
-		return actionDoneMsg{status: interactiveSuccessStatus("new", "")}
+		id := ""
+		if tracking {
+			id = m.sessionCreatedSince(known)
+		}
+		if reported {
+			return actionDoneMsg{status: m.reportedInteractiveStatus("new", id, result)}
+		}
+		return actionDoneMsg{status: interactiveReturnStatus("new")}
 	})
+}
+
+func (m model) snapshotSessionIDs() (map[string]struct{}, bool) {
+	if m.deps.Store == nil {
+		return nil, false
+	}
+	sessions, err := m.deps.Store.ListSessions()
+	if err != nil {
+		return nil, false
+	}
+	ids := make(map[string]struct{}, len(sessions))
+	for _, sess := range sessions {
+		ids[sess.ID] = struct{}{}
+	}
+	return ids, true
+}
+
+// sessionCreatedSince returns the one session created by an interactive `new`
+// invocation. Concurrent creators make the result ambiguous, in which case the
+// dashboard uses a neutral return message instead of attributing the wrong row.
+func (m model) sessionCreatedSince(known map[string]struct{}) string {
+	sessions, err := m.deps.Store.ListSessions()
+	if err != nil {
+		return ""
+	}
+	created := ""
+	for _, sess := range sessions {
+		if _, ok := known[sess.ID]; ok {
+			continue
+		}
+		if created != "" {
+			return ""
+		}
+		created = sess.ID
+	}
+	return created
 }
 
 func (m model) execRename(id, title string) tea.Cmd {
@@ -1011,48 +1196,95 @@ func indexOfID(sessions []*session.Session, id string) int {
 // togglePreview opens or closes the peek of the selected session's screen.
 // Opening fetches immediately; while open, the 1 s tick keeps it fresh.
 func (m model) togglePreview() (tea.Model, tea.Cmd) {
-	m.previewOn = !m.previewOn
-	m.previewText = ""
-	m.previewLabel = "Preview"
-	if !m.previewOn {
-		m.previewLabel = ""
-		return m, nil
+	if m.previewOn {
+		return m.closePreview(), nil
 	}
-	return m, m.previewCmd()
+	m.previewOn = true
+	m = m.resetPreview(previewAuto)
+	return m.requestPreview()
 }
 
 func (m model) showSessionLogs(s *session.Session) (tea.Model, tea.Cmd) {
 	m.previewOn = true
-	m.previewText = ""
-	m.previewLabel = "Logs"
+	m = m.resetPreview(previewStored)
 	m.status = "showing stored log for " + shortID(s.ID)
-	return m, m.previewCmd()
+	return m.requestPreview()
 }
 
-// previewCmd fetches a live screen peek when possible, otherwise a rendered
-// read-only excerpt from the stored raw log. Runs off the main loop.
-func (m model) previewCmd() tea.Cmd {
-	if !m.previewOn {
-		return nil
+func (m model) closePreview() model {
+	m.previewOn = false
+	m.previewGeneration++
+	m.previewText = ""
+	m.previewLabel = ""
+	m.previewStatic = false
+	return m
+}
+
+func (m model) resetPreview(mode previewMode) model {
+	m.previewMode = mode
+	m.previewGeneration++
+	m.previewText = ""
+	m.previewStatic = false
+	if mode == previewStored {
+		m.previewLabel = "Logs"
+	} else {
+		m.previewLabel = "Preview"
+	}
+	return m
+}
+
+// requestPreview schedules at most one fetch for the current preview state.
+// Terminal stored logs are immutable once Finish is recorded, so their accepted
+// result remains cached until the preview, selection, mode, or width changes.
+func (m model) requestPreview() (model, tea.Cmd) {
+	if !m.previewOn || m.previewPending || m.previewStatic {
+		return m, nil
 	}
 	s := m.current()
 	if s == nil {
-		return nil
+		return m, nil
 	}
-	id, sock, cols := s.ID, filepath.Join(m.deps.SocketDir, s.ID+".sock"), max(1, m.width-4)
-	forceLogs := m.previewLabel == "Logs"
-	return func() tea.Msg {
-		if forceLogs || s.Status.Terminal() || !m.attachAlive(sock) {
-			return previewMsg{id: id, label: "Logs", text: m.sessionLogPreview(s, cols)}
+	id := s.ID
+	sock := filepath.Join(m.deps.SocketDir, s.ID+".sock")
+	cols := max(1, m.width-4)
+	mode := m.previewMode
+	generation := m.previewGeneration
+	m.previewPending = true
+	return m, func() tea.Msg {
+		if mode == previewStored || s.Status.Terminal() || !m.attachAlive(sock) {
+			return previewMsg{
+				id:         id,
+				generation: generation,
+				mode:       mode,
+				label:      "Logs",
+				text:       m.sessionLogPreview(s, cols),
+				static:     s.Status.Terminal(),
+			}
 		}
-		return previewMsg{id: id, label: "Preview", text: attach.Peek(sock, previewRows, cols)}
+		return previewMsg{
+			id:         id,
+			generation: generation,
+			mode:       mode,
+			label:      "Preview",
+			text:       attach.Peek(sock, previewRows, cols),
+		}
 	}
 }
 
+// previewCmd is a read-only convenience for tests. State-changing paths use
+// requestPreview so the pending flag serializes requests.
+func (m model) previewCmd() tea.Cmd {
+	_, cmd := m.requestPreview()
+	return cmd
+}
+
 type previewMsg struct {
-	id    string
-	label string
-	text  string
+	id         string
+	generation uint64
+	mode       previewMode
+	label      string
+	text       string
+	static     bool
 }
 
 func (m model) sessionLogPreview(s *session.Session, cols int) string {

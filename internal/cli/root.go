@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/LeJamon/rvr/internal/attach"
 	"github.com/LeJamon/rvr/internal/config"
 	"github.com/LeJamon/rvr/internal/store"
 	"github.com/LeJamon/rvr/internal/tui"
@@ -40,6 +41,7 @@ func selectVersion(injected, moduleVersion string) string {
 
 // Execute runs the root command and returns its error for main to report.
 func Execute() error {
+	attach.ProtectResultFD()
 	return newRootCmd().Execute()
 }
 

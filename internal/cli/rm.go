@@ -1,20 +1,15 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
 
-	"github.com/LeJamon/rvr/internal/attach"
 	"github.com/LeJamon/rvr/internal/session"
+	"github.com/LeJamon/rvr/internal/sessionctl"
 	"github.com/LeJamon/rvr/internal/store"
 )
-
-type removeTarget struct {
-	sess       *session.Session
-	socketPath string
-	alive      bool
-}
 
 func newRmCmd() *cobra.Command {
 	var force bool
@@ -72,7 +67,7 @@ func newPruneCmd() *cobra.Command {
 			}
 			var ids []string
 			for _, sess := range sessions {
-				if sess.Status.Terminal() && !attach.Alive(e.socketPath(sess.ID)) {
+				if sess.Status.Terminal() {
 					ids = append(ids, sess.ID)
 				}
 			}
@@ -81,9 +76,17 @@ func newPruneCmd() *cobra.Command {
 				fmt.Fprintln(out, "No terminal sessions to prune.")
 				return nil
 			}
-			removed, err := e.removeSessions(st, ids, false)
+			results, err := sessionctl.Remove(st, ids, sessionctl.Options{
+				SocketDir:  e.paths.SocketDir,
+				SkipActive: true,
+			})
 			if err != nil {
 				return err
+			}
+			removed := removedSessions(results)
+			if len(removed) == 0 {
+				fmt.Fprintln(out, "No terminal sessions to prune.")
+				return nil
 			}
 			if len(removed) == 1 {
 				fmt.Fprintln(out, "Pruned 1 session.")
@@ -96,69 +99,25 @@ func newPruneCmd() *cobra.Command {
 }
 
 func (e *env) removeSessions(st *store.Store, ids []string, force bool) ([]*session.Session, error) {
-	targets, err := e.resolveRemoveTargets(st, ids)
+	results, err := sessionctl.Remove(st, ids, sessionctl.Options{
+		SocketDir: e.paths.SocketDir,
+		Force:     force,
+	})
 	if err != nil {
+		var active *sessionctl.ActiveError
+		if errors.As(err, &active) {
+			return nil, fmt.Errorf("session %s %s; use --force to kill and remove it",
+				shortID(active.Session.ID), active.Reason)
+		}
 		return nil, err
 	}
-	for _, target := range targets {
-		if !target.needsForce() {
-			continue
-		}
-		if !force {
-			return nil, fmt.Errorf("session %s %s; use --force to kill and remove it",
-				shortID(target.sess.ID), target.liveReason())
-		}
-	}
-	if force {
-		for _, target := range targets {
-			if !target.alive {
-				continue
-			}
-			if err := attach.Kill(target.socketPath); err != nil {
-				return nil, fmt.Errorf("kill %s before remove: %w", shortID(target.sess.ID), err)
-			}
-		}
-	}
-
-	removed := make([]*session.Session, 0, len(targets))
-	for _, target := range targets {
-		if err := st.DeleteSession(target.sess.ID); err != nil {
-			return nil, fmt.Errorf("remove %s: %w", shortID(target.sess.ID), err)
-		}
-		removed = append(removed, target.sess)
-	}
-	return removed, nil
+	return removedSessions(results), nil
 }
 
-func (e *env) resolveRemoveTargets(st *store.Store, ids []string) ([]removeTarget, error) {
-	seen := make(map[string]bool, len(ids))
-	targets := make([]removeTarget, 0, len(ids))
-	for _, id := range ids {
-		sess, err := st.GetSession(id)
-		if err != nil {
-			return nil, err
-		}
-		if seen[sess.ID] {
-			continue
-		}
-		seen[sess.ID] = true
-		socketPath := e.socketPath(sess.ID)
-		targets = append(targets, removeTarget{
-			sess:       sess,
-			socketPath: socketPath,
-			alive:      attach.Alive(socketPath),
-		})
+func removedSessions(results []sessionctl.Result) []*session.Session {
+	removed := make([]*session.Session, 0, len(results))
+	for _, result := range results {
+		removed = append(removed, result.Session)
 	}
-	return targets, nil
-}
-
-func (t removeTarget) needsForce() bool {
-	return t.sess.Status.Live() || t.alive
-}
-
-func (t removeTarget) liveReason() string {
-	if t.sess.Status.Live() {
-		return fmt.Sprintf("is %s", t.sess.Status)
-	}
-	return "is still reachable"
+	return removed
 }

@@ -41,12 +41,14 @@ func newLogsCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			f, err := os.Open(path)
 			if err != nil {
-				if follow && sess.Status.Terminal() {
-					fmt.Fprintln(cmd.ErrOrStderr(), terminalFollowMessage(sess))
-					return nil
-				}
 				if sess.Status == session.StatusFailed {
 					fmt.Fprintln(out, e.failureSummary(st, sess))
+					if !follow {
+						return nil
+					}
+				}
+				if follow && sess.Status.Terminal() {
+					fmt.Fprintln(cmd.ErrOrStderr(), terminalFollowMessage(sess))
 					return nil
 				}
 				return fmt.Errorf("no log for session %s", shortID(sess.ID))

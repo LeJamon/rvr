@@ -22,6 +22,7 @@ import (
 var (
 	ErrNotFound  = errors.New("session not found")
 	ErrAmbiguous = errors.New("session ID prefix is ambiguous")
+	ErrConflict  = errors.New("session changed concurrently")
 )
 
 // migrations are forward-only; settings.schema_version records how many have
@@ -289,6 +290,40 @@ func (s *Store) SetRuntime(id string, pid int, socketPath string, status session
 	)
 }
 
+// BeginResume starts a new lifecycle for an existing session before its
+// supervisor process is spawned. Clearing the previous terminal outcome keeps
+// waiters and cleanup commands from mistaking an in-flight resume for the old
+// completed/failed run.
+func (s *Store) BeginResume(sess *session.Session) error {
+	res, err := s.db.Exec(
+		`UPDATE sessions
+		 SET status = ?, status_detail = NULL, pid = NULL, socket_path = NULL,
+		     exit_code = NULL, ended_at = NULL, updated_at = ?
+		 WHERE id = ? AND status = ? AND pid IS ? AND socket_path IS ?
+		   AND exit_code IS ? AND ended_at IS ?`,
+		string(session.StatusStarting), fmtTime(time.Now().UTC()), sess.ID,
+		string(sess.Status), nullInt(sess.PID), nullStr(sess.SocketPath),
+		nullIntPtr(sess.ExitCode), nullTimePtr(sess.EndedAt),
+	)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	var exists int
+	if err := s.db.QueryRow(`SELECT 1 FROM sessions WHERE id = ?`, sess.ID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %q", ErrNotFound, sess.ID)
+	} else if err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %q", ErrConflict, sess.ID)
+}
+
 // SetTitle renames a session. The title is rvr's UI label only; it does not
 // touch the harness's own session.
 func (s *Store) SetTitle(id, title string) error {
@@ -364,6 +399,54 @@ func (s *Store) DeleteSession(id string) error {
 		return fmt.Errorf("%w: %q", ErrNotFound, id)
 	}
 	return tx.Commit()
+}
+
+// DeleteTerminalSession removes a session only if it is still terminal at the
+// moment the write transaction begins. A concurrent BeginResume either commits
+// first (and this returns false without deleting events) or loses to deletion
+// and observes ErrNotFound, so prune and non-force rm cannot erase a new run.
+func (s *Store) DeleteTerminalSession(id string) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	terminalArgs := []any{
+		id, id,
+		string(session.StatusCompleted), string(session.StatusFailed), string(session.StatusCancelled),
+	}
+	if _, err := tx.Exec(
+		`DELETE FROM events
+		 WHERE session_id = ?
+		   AND EXISTS (
+		       SELECT 1 FROM sessions
+		       WHERE id = ? AND status IN (?, ?, ?)
+		   )`,
+		terminalArgs...,
+	); err != nil {
+		_ = tx.Rollback()
+		return false, err
+	}
+	res, err := tx.Exec(
+		`DELETE FROM sessions WHERE id = ? AND status IN (?, ?, ?)`,
+		id, string(session.StatusCompleted), string(session.StatusFailed), string(session.StatusCancelled),
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		_ = tx.Rollback()
+		return false, err
+	}
+	if n == 0 {
+		_ = tx.Rollback()
+		return false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // RecordEvent appends to the immutable event log. payload is JSON-marshaled;

@@ -151,6 +151,29 @@ func TestLogsFollowCommandReturnsWhenTerminalLogMissing(t *testing.T) {
 	}
 }
 
+func TestLogsFollowCommandPreservesFailureSummaryWhenLogMissing(t *testing.T) {
+	const detail = "start harness failed: executable not found"
+	paths, sess := commandLogSessionWithTerminal(t, "", false, session.StatusFailed, detail)
+
+	var out, errOut bytes.Buffer
+	cmd := newLogsCmd()
+	cmd.SetArgs([]string{"-f", sess.ID})
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+
+	runLogsCommand(t, cmd)
+
+	wantOut := "session cmdlog00 failed: " + detail + "\nSupervisor log: " +
+		filepath.Join(paths.LogsDir, sess.ID+".supervisor.log") + "\n"
+	if got := out.String(); got != wantOut {
+		t.Fatalf("stdout = %q, want %q", got, wantOut)
+	}
+	wantErr := "Session cmdlog00 ended (failed).\n"
+	if got := errOut.String(); got != wantErr {
+		t.Fatalf("stderr = %q, want %q", got, wantErr)
+	}
+}
+
 func loggedSession(t *testing.T, status session.Status, log string) (*store.Store, *session.Session, string) {
 	t.Helper()
 
@@ -180,6 +203,16 @@ func loggedSession(t *testing.T, status session.Status, log string) (*store.Stor
 }
 
 func commandLogSession(t *testing.T, log string, writeLog bool) (config.Paths, *session.Session) {
+	return commandLogSessionWithTerminal(t, log, writeLog, session.StatusCompleted, "")
+}
+
+func commandLogSessionWithTerminal(
+	t *testing.T,
+	log string,
+	writeLog bool,
+	terminalStatus session.Status,
+	detail string,
+) (config.Paths, *session.Session) {
 	t.Helper()
 
 	root := t.TempDir()
@@ -206,9 +239,13 @@ func commandLogSession(t *testing.T, log string, writeLog bool) (config.Paths, *
 		st.Close()
 		t.Fatalf("CreateSession: %v", err)
 	}
-	if err := st.Finish(sess.ID, session.StatusCompleted, 0); err != nil {
+	exitCode := 0
+	if terminalStatus == session.StatusFailed {
+		exitCode = 1
+	}
+	if err := st.FinishWithDetail(sess.ID, terminalStatus, exitCode, detail); err != nil {
 		st.Close()
-		t.Fatalf("Finish: %v", err)
+		t.Fatalf("FinishWithDetail: %v", err)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close store: %v", err)

@@ -1,6 +1,7 @@
 package termview
 
 import (
+	"bytes"
 	"strings"
 
 	"github.com/hinshun/vt10x"
@@ -20,8 +21,44 @@ func PreviewBytes(p []byte, termRows, maxRows, maxCols int) string {
 		termRows = maxRows
 	}
 	sc := New(maxCols, termRows)
-	sc.Write(p)
+	sc.Write(finalScreenBytes(p))
 	return sc.PreviewText(maxRows, maxCols)
+}
+
+var altScreenLeaveSequences = [...][]byte{
+	[]byte("\x1b[?1049l"),
+	[]byte("\x1b[?1047l"),
+	[]byte("\x1b[?47l"),
+}
+
+var altScreenEnterSequences = [...][]byte{
+	[]byte("\x1b[?1049h"),
+	[]byte("\x1b[?1047h"),
+	[]byte("\x1b[?47h"),
+}
+
+// finalScreenBytes preserves the last frame drawn by a full-screen program.
+// Replaying an alternate-screen leave switches the emulator back to the old
+// primary buffer, hiding the conversation the preview is meant to show. Any
+// output after that leave belongs to the restored parent terminal rather than
+// the completed full-screen session.
+func finalScreenBytes(p []byte) []byte {
+	lastLeave := lastSequenceIndex(p, altScreenLeaveSequences[:])
+	lastEnter := lastSequenceIndex(p, altScreenEnterSequences[:])
+	if lastLeave >= 0 && lastLeave > lastEnter {
+		return p[:lastLeave]
+	}
+	return p
+}
+
+func lastSequenceIndex(p []byte, sequences [][]byte) int {
+	last := -1
+	for _, seq := range sequences {
+		if i := bytes.LastIndex(p, seq); i > last {
+			last = i
+		}
+	}
+	return last
 }
 
 type Screen struct {

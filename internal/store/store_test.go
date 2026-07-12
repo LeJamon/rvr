@@ -157,6 +157,145 @@ func TestFinishWithDetail(t *testing.T) {
 	}
 }
 
+func TestBeginResumeClearsPreviousTerminalOutcome(t *testing.T) {
+	st := openTemp(t)
+	in := sample("23232323-0000-0000-0000-000000000023")
+	if err := st.CreateSession(in); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRuntime(in.ID, 1234, "/tmp/old.sock", session.StatusRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinishWithDetail(in.ID, session.StatusFailed, 127, "old failure"); err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := st.GetSession(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BeginResume(terminal); err != nil {
+		t.Fatalf("BeginResume: %v", err)
+	}
+
+	got, err := st.GetSession(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != session.StatusStarting || got.StatusDetail != "" {
+		t.Fatalf("resumed state = (%q, %q), want starting with no detail", got.Status, got.StatusDetail)
+	}
+	if got.PID != 0 || got.SocketPath != "" || got.ExitCode != nil || got.EndedAt != nil {
+		t.Fatalf("previous runtime outcome survived resume: pid=%d socket=%q exit=%v ended=%v",
+			got.PID, got.SocketPath, got.ExitCode, got.EndedAt)
+	}
+}
+
+func TestBeginResumeDoesNotOverwriteConcurrentRuntime(t *testing.T) {
+	st := openTemp(t)
+	in := sample("24242424-0000-0000-0000-000000000024")
+	if err := st.CreateSession(in); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Finish(in.ID, session.StatusCompleted, 0); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := st.GetSession(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	winner := *stale
+	if err := st.BeginResume(&winner); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRuntime(in.ID, 4321, "/tmp/winner.sock", session.StatusRunning); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.BeginResume(stale); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale BeginResume error = %v, want ErrConflict", err)
+	}
+	got, err := st.GetSession(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != session.StatusRunning || got.PID != 4321 || got.SocketPath != "/tmp/winner.sock" {
+		t.Fatalf("stale resume overwrote winner runtime: status=%q pid=%d socket=%q",
+			got.Status, got.PID, got.SocketPath)
+	}
+}
+
+func TestBeginResumeIgnoresConcurrentMetadataChange(t *testing.T) {
+	for _, status := range []session.Status{session.StatusCompleted, session.StatusRunning} {
+		t.Run(string(status), func(t *testing.T) {
+			st := openTemp(t)
+			in := sample("25252525-0000-0000-0000-000000000025")
+			if err := st.CreateSession(in); err != nil {
+				t.Fatal(err)
+			}
+			if status.Terminal() {
+				if err := st.Finish(in.ID, status, 0); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := st.SetStatus(in.ID, status, ""); err != nil {
+				t.Fatal(err)
+			}
+			stale, err := st.GetSession(in.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := st.SetTitle(in.ID, "renamed concurrently"); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := st.BeginResume(stale); err != nil {
+				t.Fatalf("BeginResume after metadata change: %v", err)
+			}
+			got, err := st.GetSession(in.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != session.StatusStarting || got.Title != "renamed concurrently" {
+				t.Fatalf("resumed metadata state = (%q, %q), want starting with new title", got.Status, got.Title)
+			}
+		})
+	}
+}
+
+func TestBeginResumeRejectsFastCompletedConcurrentLifecycle(t *testing.T) {
+	st := openTemp(t)
+	in := sample("26262626-0000-0000-0000-000000000026")
+	if err := st.CreateSession(in); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Finish(in.ID, session.StatusCompleted, 0); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := st.GetSession(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BeginResume(stale); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetRuntime(in.ID, 9876, "/tmp/fast.sock", session.StatusRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Finish(in.ID, session.StatusFailed, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.BeginResume(stale); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale BeginResume error = %v, want ErrConflict", err)
+	}
+	got, err := st.GetSession(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != session.StatusFailed || got.ExitCode == nil || *got.ExitCode != 1 {
+		t.Fatalf("fast winner outcome was overwritten: status=%q exit=%v", got.Status, got.ExitCode)
+	}
+}
+
 // TestSetStatusIgnoresTerminalSession guards the terminal guard: a late state
 // write (e.g. a generic-adapter idle tick racing shutdown) must neither
 // resurrect a finished session nor be reported as an error.
