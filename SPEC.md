@@ -297,7 +297,7 @@ re-trigger agent work — so auto-resume is safe and spends no tokens.
 XDG paths are used on both macOS and Linux (`XDG_CONFIG_HOME`/`XDG_DATA_HOME`
 respected) — consistent with how opencode and pi behave.
 
-### Schema (v1)
+### Schema (v2)
 
 ```sql
 CREATE TABLE sessions (
@@ -315,7 +315,8 @@ CREATE TABLE sessions (
   exit_code          INTEGER,
   created_at         TEXT NOT NULL,      -- RFC3339 UTC
   updated_at         TEXT NOT NULL,
-  ended_at           TEXT
+  ended_at           TEXT,
+  lifecycle          INTEGER NOT NULL DEFAULT 1 -- incremented for each resume generation
 );
 CREATE TABLE events (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

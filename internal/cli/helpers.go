@@ -43,22 +43,34 @@ func (e *env) supervisorLogPath(id string) string {
 	return filepath.Join(e.paths.LogsDir, id+".supervisor.log")
 }
 
-func (e *env) waitForSocketOrTerminal(st *store.Store, id string, timeout time.Duration) (alive bool, terminal *session.Session) {
+func (e *env) waitForSocketOrTerminal(
+	st *store.Store,
+	id string,
+	timeout time.Duration,
+) (alive bool, terminal *session.Session, err error) {
 	deadline := time.Now().Add(timeout)
 	path := e.socketPath(id)
 	for time.Now().Before(deadline) {
 		if attach.Alive(path) {
-			return true, nil
+			return true, nil, nil
 		}
-		if sess, err := st.GetSession(id); err == nil && sess.Status.Terminal() {
-			return false, sess
+		sess, err := st.GetSession(id)
+		if err != nil {
+			return false, nil, err
+		}
+		if sess.Status.Terminal() {
+			return false, sess, nil
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if sess, err := st.GetSession(id); err == nil && sess.Status.Terminal() {
-		return false, sess
+	sess, err := st.GetSession(id)
+	if err != nil {
+		return false, nil, err
 	}
-	return false, nil
+	if sess.Status.Terminal() {
+		return false, sess, nil
+	}
+	return false, nil, nil
 }
 
 func (e *env) supervisorStartingError(id string, timeout time.Duration) error {

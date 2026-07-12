@@ -104,7 +104,10 @@ key (ctrl+\ by default). The session keeps running after you detach.`,
 				return nil
 			}
 			wait := 10 * time.Second
-			if alive, terminal := e.waitForSocketOrTerminal(st, sess.ID, wait); !alive {
+			if alive, terminal, waitErr := e.waitForSocketOrTerminal(st, sess.ID, wait); !alive {
+				if waitErr != nil {
+					return waitErr
+				}
 				if terminal != nil {
 					return e.sessionUnavailableError(st, terminal)
 				}

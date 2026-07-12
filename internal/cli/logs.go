@@ -54,6 +54,15 @@ func newLogsCmd() *cobra.Command {
 				return fmt.Errorf("no log for session %s", shortID(sess.ID))
 			}
 			defer f.Close()
+			if follow && sess.Status == session.StatusFailed {
+				if info, statErr := f.Stat(); statErr != nil {
+					return statErr
+				} else if info.Size() == 0 {
+					fmt.Fprintln(out, e.failureSummary(st, sess))
+					fmt.Fprintln(cmd.ErrOrStderr(), terminalFollowMessage(sess))
+					return nil
+				}
+			}
 
 			if !follow {
 				pos, _ := io.Copy(out, f)
@@ -71,6 +80,9 @@ func newLogsCmd() *cobra.Command {
 				ErrOut:     cmd.ErrOrStderr(),
 				Interval:   logFollowPollInterval,
 				Alive:      attach.Alive,
+				FailureSummary: func(sess *session.Session) string {
+					return e.failureSummary(st, sess)
+				},
 			})
 		},
 	}
@@ -79,14 +91,15 @@ func newLogsCmd() *cobra.Command {
 }
 
 type logFollowOptions struct {
-	Store      *store.Store
-	SessionID  string
-	SocketPath string
-	File       *os.File
-	Out        io.Writer
-	ErrOut     io.Writer
-	Interval   time.Duration
-	Alive      func(string) bool
+	Store          *store.Store
+	SessionID      string
+	SocketPath     string
+	File           *os.File
+	Out            io.Writer
+	ErrOut         io.Writer
+	Interval       time.Duration
+	Alive          func(string) bool
+	FailureSummary func(*session.Session) string
 }
 
 func followRawLog(opts logFollowOptions) error {
@@ -111,6 +124,15 @@ func followRawLog(opts logFollowOptions) error {
 		if msg, err := followEndMessage(opts); err != nil {
 			return err
 		} else if msg != "" {
+			if pos == 0 && opts.FailureSummary != nil {
+				sess, getErr := opts.Store.GetSession(opts.SessionID)
+				if getErr != nil {
+					return getErr
+				}
+				if sess.Status == session.StatusFailed {
+					fmt.Fprintln(opts.Out, opts.FailureSummary(sess))
+				}
+			}
 			fmt.Fprintln(opts.ErrOut, msg)
 			return nil
 		}

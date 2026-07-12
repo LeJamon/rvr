@@ -49,6 +49,7 @@ type Session struct {
 	PID               int        `json:"pid,omitempty"`
 	SocketPath        string     `json:"socket_path,omitempty"`
 	ExitCode          *int       `json:"exit_code,omitempty"`
+	Lifecycle         int64      `json:"-"`
 	CreatedAt         time.Time  `json:"created_at"`
 	UpdatedAt         time.Time  `json:"updated_at"`
 	EndedAt           *time.Time `json:"ended_at,omitempty"`

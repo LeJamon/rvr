@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/rvr/internal/config"
 	"github.com/LeJamon/rvr/internal/session"
@@ -47,5 +48,21 @@ func TestResumeReportsUnknownHarnessBeforeResumability(t *testing.T) {
 	}
 	if got, want := err.Error(), `session removed0 uses unknown harness "removed"`; !strings.Contains(got, want) {
 		t.Fatalf("error = %q, want it to contain %q", got, want)
+	}
+}
+
+func TestStartingHandoffWait(t *testing.T) {
+	now := time.Now()
+	recent := &session.Session{Status: session.StatusStarting, UpdatedAt: now.Add(-time.Second)}
+	if wait := startingHandoffWait(recent, now); wait <= 0 || wait >= supervisorStartGrace {
+		t.Fatalf("recent starting wait = %s", wait)
+	}
+	old := &session.Session{Status: session.StatusStarting, UpdatedAt: now.Add(-supervisorStartGrace)}
+	if wait := startingHandoffWait(old, now); wait != 0 {
+		t.Fatalf("old starting wait = %s, want 0", wait)
+	}
+	running := &session.Session{Status: session.StatusRunning, UpdatedAt: now}
+	if wait := startingHandoffWait(running, now); wait != 0 {
+		t.Fatalf("running wait = %s, want 0", wait)
 	}
 }

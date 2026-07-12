@@ -83,6 +83,46 @@ func TestFollowRawLogDrainsGrowthBeforeTerminalExit(t *testing.T) {
 	}
 }
 
+func TestFollowRawLogReportsFailureWhenEmptyLogLaterFails(t *testing.T) {
+	st, sess, logPath := loggedSession(t, session.StatusStarting, "")
+	f := openLog(t, logPath)
+	var out, errOut bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- followRawLog(logFollowOptions{
+			Store:      st,
+			SessionID:  sess.ID,
+			SocketPath: "/tmp/rvr-empty-failure.sock",
+			File:       f,
+			Out:        &out,
+			ErrOut:     &errOut,
+			Interval:   time.Millisecond,
+			Alive:      func(string) bool { return false },
+			FailureSummary: func(sess *session.Session) string {
+				return "failure detail: " + sess.StatusDetail
+			},
+		})
+	}()
+	time.Sleep(10 * time.Millisecond)
+	if err := st.FinishWithDetail(sess.ID, session.StatusFailed, 1, "listen failed"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("follow did not return after empty log failed")
+	}
+	if got := out.String(); got != "failure detail: listen failed\n" {
+		t.Fatalf("stdout = %q", got)
+	}
+	if got := errOut.String(); got != "Session logdone0 ended (failed).\n" {
+		t.Fatalf("stderr = %q", got)
+	}
+}
+
 func TestFollowRawLogExitsWhenLiveSessionSocketDisappears(t *testing.T) {
 	st, sess, logPath := loggedSession(t, session.StatusRunning, "still here\n")
 
@@ -171,6 +211,27 @@ func TestLogsFollowCommandPreservesFailureSummaryWhenLogMissing(t *testing.T) {
 	wantErr := "Session cmdlog00 ended (failed).\n"
 	if got := errOut.String(); got != wantErr {
 		t.Fatalf("stderr = %q, want %q", got, wantErr)
+	}
+}
+
+func TestLogsFollowCommandPreservesFailureSummaryWhenLogEmpty(t *testing.T) {
+	const detail = "socket listen failed: address already in use"
+	paths, sess := commandLogSessionWithTerminal(t, "", true, session.StatusFailed, detail)
+
+	var out, errOut bytes.Buffer
+	cmd := newLogsCmd()
+	cmd.SetArgs([]string{"-f", sess.ID})
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	runLogsCommand(t, cmd)
+
+	wantOut := "session cmdlog00 failed: " + detail + "\nSupervisor log: " +
+		filepath.Join(paths.LogsDir, sess.ID+".supervisor.log") + "\n"
+	if got := out.String(); got != wantOut {
+		t.Fatalf("stdout = %q, want %q", got, wantOut)
+	}
+	if got, want := errOut.String(), "Session cmdlog00 ended (failed).\n"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }
 

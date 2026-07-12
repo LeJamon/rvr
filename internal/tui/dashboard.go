@@ -38,6 +38,9 @@ type Deps struct {
 	SocketDir  string
 	ConfigPath string // config.toml, for adding harnesses from the dashboard
 	Version    string // rvr release, shown in the header
+	// Reconcile repairs interrupted session lifecycles. The dashboard invokes it
+	// periodically so a handoff skipped during its startup grace is retried.
+	Reconcile func() error
 	// Scope, when set, restricts the dashboard to sessions under this absolute
 	// path and launches new sessions there. Empty = all sessions, cwd launches.
 	Scope string
@@ -104,6 +107,7 @@ type model struct {
 	previewGeneration uint64
 	previewPending    bool // one request is in flight; prevents overlapping raw-log replays
 	previewStatic     bool // terminal stored-log result is immutable and can be reused
+	reconcilePending  bool // serializes periodic lifecycle reconciliation
 
 	attachAliveFn func(string) bool
 	attachKillFn  func(string) error
@@ -144,6 +148,8 @@ type sessionsMsg struct {
 	err      error
 }
 type tickMsg struct{}
+type reconcileTickMsg struct{}
+type reconcileDoneMsg struct{ err error }
 
 // actionDoneMsg reports the result of a shelled-out or background action.
 // restorePrompt, when set, puts a would-be-lost prompt back in the composer
@@ -262,7 +268,7 @@ func harnessNames(cfg *config.Config) []string {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(m.reload(), tickCmd(), gitTickCmd(), textarea.Blink)
+	return tea.Batch(m.reload(), tickCmd(), gitTickCmd(), m.reconcileTickCmd(), textarea.Blink)
 }
 
 func (m model) reload() tea.Cmd {
@@ -315,6 +321,20 @@ type gitTickMsg struct{}
 
 func gitTickCmd() tea.Cmd {
 	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return gitTickMsg{} })
+}
+
+func (m model) reconcileTickCmd() tea.Cmd {
+	if m.deps.Reconcile == nil {
+		return nil
+	}
+	return tea.Tick(5*time.Second, func(time.Time) tea.Msg { return reconcileTickMsg{} })
+}
+
+func (m model) reconcileCmd() tea.Cmd {
+	if m.deps.Reconcile == nil {
+		return nil
+	}
+	return func() tea.Msg { return reconcileDoneMsg{err: m.deps.Reconcile()} }
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -375,6 +395,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var preview tea.Cmd
 		m, preview = m.requestPreview()
 		return m, tea.Batch(m.reload(), tickCmd(), preview)
+
+	case reconcileTickMsg:
+		if m.reconcilePending {
+			return m, m.reconcileTickCmd()
+		}
+		m.reconcilePending = true
+		return m, tea.Batch(m.reconcileCmd(), m.reconcileTickCmd())
+
+	case reconcileDoneMsg:
+		m.reconcilePending = false
+		if msg.err != nil {
+			m.status = "reconcile failed: " + msg.err.Error()
+		} else if strings.HasPrefix(m.status, "reconcile failed: ") {
+			m.status = ""
+		}
+		return m, nil
 
 	case previewMsg:
 		// Only one preview command is ever in flight. A stale response releases
@@ -749,15 +785,39 @@ func (m model) setDefaultHarness() (tea.Model, tea.Cmd) {
 		return m.cancelPick()
 	}
 	name := filtered[m.pickIdx]
-	m.deps.Cfg.DefaultHarness = name
-	// Also select the harness (same as pressing enter).
-	m.harnessIdx = slices.Index(m.harnesses, name)
 	m.picking = false
 	m.searchFocused = false
+	if m.deps.ConfigPath == "" {
+		m.status = "set default failed: no config path"
+		return m, m.composer.Focus()
+	}
+	unlock, err := acquireConfigLock(m.deps.ConfigPath)
+	if err != nil {
+		m.status = "set default failed: " + err.Error()
+		return m, m.composer.Focus()
+	}
+	defer unlock()
+	cfg, err := config.Load(m.deps.ConfigPath)
+	if err != nil {
+		m.status = "set default failed: " + err.Error()
+		return m, m.composer.Focus()
+	}
+	if _, ok := cfg.Harnesses[name]; !ok {
+		m.status = "set default failed: harness " + name + " no longer exists"
+		return m, m.composer.Focus()
+	}
 	if err := setDefaultInConfig(m.deps.ConfigPath, name); err != nil {
 		m.status = "set default failed: " + err.Error()
 		return m, m.composer.Focus()
 	}
+	cfg, err = config.Load(m.deps.ConfigPath)
+	if err != nil {
+		m.status = "set default failed: " + err.Error()
+		return m, m.composer.Focus()
+	}
+	m.deps.Cfg = cfg
+	m.harnesses = harnessNames(cfg)
+	m.harnessIdx = slices.Index(m.harnesses, name)
 	m.status = "set " + name + " as default"
 	return m, m.composer.Focus()
 }

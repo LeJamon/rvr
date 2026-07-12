@@ -1577,6 +1577,60 @@ func TestPreviewTickDoesNotOverlapPendingReplay(t *testing.T) {
 	}
 }
 
+func TestReconcileTickRunsPeriodicallyWithoutOverlap(t *testing.T) {
+	calls := 0
+	m := newTestModel(nil)
+	m.deps.Reconcile = func() error {
+		calls++
+		return nil
+	}
+
+	next, cmd := m.Update(reconcileTickMsg{})
+	m = next.(model)
+	if !m.reconcilePending || cmd == nil {
+		t.Fatalf("reconcile tick did not start work: pending=%v cmd=nil:%v", m.reconcilePending, cmd == nil)
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("reconcile tick command = %T len=%d, want two-command batch", cmd(), len(batch))
+	}
+	done, ok := batch[0]().(reconcileDoneMsg)
+	if !ok {
+		t.Fatalf("reconcile command returned %T, want reconcileDoneMsg", batch[0]())
+	}
+	if done.err != nil || calls != 1 {
+		t.Fatalf("reconcile result = %v, calls=%d", done.err, calls)
+	}
+	next, _ = m.Update(done)
+	m = next.(model)
+	if m.reconcilePending {
+		t.Fatal("completed reconciliation left pending set")
+	}
+	next, _ = m.Update(reconcileDoneMsg{err: errors.New("temporary")})
+	m = next.(model)
+	if !strings.Contains(m.status, "reconcile failed: temporary") {
+		t.Fatalf("reconcile error status = %q", m.status)
+	}
+	next, _ = m.Update(reconcileDoneMsg{})
+	m = next.(model)
+	if m.status != "" {
+		t.Fatalf("successful reconciliation retained stale error status %q", m.status)
+	}
+	m.status = "user action completed"
+	next, _ = m.Update(reconcileDoneMsg{})
+	m = next.(model)
+	if m.status != "user action completed" {
+		t.Fatalf("successful reconciliation cleared unrelated status %q", m.status)
+	}
+
+	m.reconcilePending = true
+	next, cmd = m.Update(reconcileTickMsg{})
+	m = next.(model)
+	if calls != 1 || cmd == nil {
+		t.Fatalf("overlapping tick started work: calls=%d cmd=nil:%v", calls, cmd == nil)
+	}
+}
+
 // TestPreviewTickKeepsFetchingWhileOpen executes the tick's command batch and
 // asserts it contains the preview fetch — guarding the tickMsg → previewCmd
 // wiring that keeps an open preview fresh, not just previewCmd in isolation

@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/rvr/internal/config"
 	"github.com/LeJamon/rvr/internal/session"
@@ -86,6 +88,22 @@ func TestFailureDetailFallsBackToErrorEvent(t *testing.T) {
 
 	if got := failureDetail(st, sess); got != "adapter init failed: boom" {
 		t.Fatalf("failureDetail = %q, want error event message", got)
+	}
+}
+
+func TestWaitForSocketOrTerminalReturnsWhenSessionIsRemoved(t *testing.T) {
+	st, sess := failedSession(t, "")
+	if err := st.DeleteSession(sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	e := &env{paths: config.Paths{SocketDir: t.TempDir()}}
+	start := time.Now()
+	_, _, err := e.waitForSocketOrTerminal(st, sess.ID, time.Second)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("wait error = %v, want ErrNotFound", err)
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("missing session wait took %s", elapsed)
 	}
 }
 

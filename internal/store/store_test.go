@@ -51,6 +51,9 @@ func TestCreateAndGet(t *testing.T) {
 	if got.InitialPrompt != in.InitialPrompt {
 		t.Errorf("initial prompt = %q, want %q", got.InitialPrompt, in.InitialPrompt)
 	}
+	if in.Lifecycle != 1 || got.Lifecycle != 1 {
+		t.Errorf("initial lifecycle = (%d, %d), want 1", in.Lifecycle, got.Lifecycle)
+	}
 }
 
 func TestGetByUniquePrefix(t *testing.T) {
@@ -274,7 +277,8 @@ func TestBeginResumeRejectsFastCompletedConcurrentLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.BeginResume(stale); err != nil {
+	winner := *stale
+	if err := st.BeginResume(&winner); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetRuntime(in.ID, 9876, "/tmp/fast.sock", session.StatusRunning); err != nil {
@@ -293,6 +297,64 @@ func TestBeginResumeRejectsFastCompletedConcurrentLifecycle(t *testing.T) {
 	}
 	if got.Status != session.StatusFailed || got.ExitCode == nil || *got.ExitCode != 1 {
 		t.Fatalf("fast winner outcome was overwritten: status=%q exit=%v", got.Status, got.ExitCode)
+	}
+}
+
+func TestBeginResumeRejectsCompletedObservedLifecycle(t *testing.T) {
+	st := openTemp(t)
+	in := sample("28282828-0000-0000-0000-000000000028")
+	if err := st.CreateSession(in); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetStatus(in.ID, session.StatusRunning, ""); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := st.GetSession(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Finish(in.ID, session.StatusCompleted, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.BeginResume(stale); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("stale running BeginResume error = %v, want ErrConflict", err)
+	}
+}
+
+func TestFinishIfCurrentRejectsNewLifecycle(t *testing.T) {
+	st := openTemp(t)
+	in := sample("27272727-0000-0000-0000-000000000027")
+	if err := st.CreateSession(in); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetStatus(in.ID, session.StatusRunning, ""); err != nil {
+		t.Fatal(err)
+	}
+	current, err := st.GetSession(in.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := *current
+	if err := st.BeginResume(current); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := st.FinishIfCurrent(&stale, session.StatusFailed, 1, "stale repair")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("stale snapshot overwrote a new lifecycle")
+	}
+	if err := st.SetTitle(in.ID, "metadata changed"); err != nil {
+		t.Fatal(err)
+	}
+	changed, err = st.FinishIfCurrent(current, session.StatusFailed, 1, "current failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("metadata change blocked current lifecycle finish")
 	}
 }
 

@@ -61,6 +61,8 @@ CREATE TABLE repositories (
   name         TEXT NOT NULL,
   last_used_at TEXT NOT NULL
 );
+`, `
+ALTER TABLE sessions ADD COLUMN lifecycle INTEGER NOT NULL DEFAULT 1;
 `}
 
 // Event is one row of the append-only event log.
@@ -173,17 +175,18 @@ func (s *Store) migrate() error {
 func (s *Store) CreateSession(sess *session.Session) error {
 	now := time.Now().UTC()
 	sess.CreatedAt, sess.UpdatedAt = now, now
+	sess.Lifecycle = 1
 	_, err := s.db.Exec(`
 		INSERT INTO sessions (
 			id, title, repo_path, branch, harness, harness_session_ref,
 			initial_prompt, status, status_detail, pid, socket_path,
-			exit_code, created_at, updated_at, ended_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			exit_code, created_at, updated_at, ended_at, lifecycle
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sess.ID, sess.Title, sess.RepoPath, nullStr(sess.Branch), sess.Harness,
 		nullStr(sess.HarnessSessionRef), nullStr(sess.InitialPrompt),
 		string(sess.Status), nullStr(sess.StatusDetail), nullInt(sess.PID),
 		nullStr(sess.SocketPath), nullIntPtr(sess.ExitCode),
-		fmtTime(now), fmtTime(now), nullTimePtr(sess.EndedAt),
+		fmtTime(now), fmtTime(now), nullTimePtr(sess.EndedAt), sess.Lifecycle,
 	)
 	return err
 }
@@ -295,15 +298,17 @@ func (s *Store) SetRuntime(id string, pid int, socketPath string, status session
 // waiters and cleanup commands from mistaking an in-flight resume for the old
 // completed/failed run.
 func (s *Store) BeginResume(sess *session.Session) error {
+	now := time.Now().UTC()
+	if !now.After(sess.UpdatedAt) {
+		now = sess.UpdatedAt.Add(time.Nanosecond)
+	}
 	res, err := s.db.Exec(
 		`UPDATE sessions
 		 SET status = ?, status_detail = NULL, pid = NULL, socket_path = NULL,
-		     exit_code = NULL, ended_at = NULL, updated_at = ?
-		 WHERE id = ? AND status = ? AND pid IS ? AND socket_path IS ?
-		   AND exit_code IS ? AND ended_at IS ?`,
-		string(session.StatusStarting), fmtTime(time.Now().UTC()), sess.ID,
-		string(sess.Status), nullInt(sess.PID), nullStr(sess.SocketPath),
-		nullIntPtr(sess.ExitCode), nullTimePtr(sess.EndedAt),
+		     exit_code = NULL, ended_at = NULL, updated_at = ?,
+		     lifecycle = lifecycle + 1
+		 WHERE id = ? AND lifecycle = ? AND status = ?`,
+		string(session.StatusStarting), fmtTime(now), sess.ID, sess.Lifecycle, string(sess.Status),
 	)
 	if err != nil {
 		return err
@@ -313,6 +318,14 @@ func (s *Store) BeginResume(sess *session.Session) error {
 		return err
 	}
 	if n > 0 {
+		sess.Status = session.StatusStarting
+		sess.StatusDetail = ""
+		sess.PID = 0
+		sess.SocketPath = ""
+		sess.ExitCode = nil
+		sess.EndedAt = nil
+		sess.UpdatedAt = now
+		sess.Lifecycle++
 		return nil
 	}
 	var exists int
@@ -354,6 +367,30 @@ func (s *Store) FinishWithDetail(id string, status session.Status, exitCode int,
 		`UPDATE sessions SET status = ?, status_detail = ?, exit_code = ?, updated_at = ?, ended_at = ? WHERE id = ?`,
 		string(status), nullStr(detail), exitCode, now, now, id,
 	)
+}
+
+// FinishIfCurrent records a terminal outcome only when the row still matches
+// the caller's snapshot. It prevents stale reconciliation or launch-failure
+// handling from overwriting a concurrently started lifecycle.
+func (s *Store) FinishIfCurrent(
+	sess *session.Session,
+	status session.Status,
+	exitCode int,
+	detail string,
+) (bool, error) {
+	now := fmtTime(time.Now().UTC())
+	res, err := s.db.Exec(
+		`UPDATE sessions
+		 SET status = ?, status_detail = ?, exit_code = ?, updated_at = ?, ended_at = ?
+		 WHERE id = ? AND status = ? AND lifecycle = ?`,
+		string(status), nullStr(detail), exitCode, now, now,
+		sess.ID, string(sess.Status), sess.Lifecycle,
+	)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // exec1 runs a single-row UPDATE and maps a zero-row result to ErrNotFound.
@@ -508,7 +545,7 @@ func (s *Store) TouchRepository(path, name string) error {
 const selectSessions = `
 	SELECT id, title, repo_path, branch, harness, harness_session_ref,
 	       initial_prompt, status, status_detail, pid, socket_path,
-	       exit_code, created_at, updated_at, ended_at
+	       exit_code, created_at, updated_at, ended_at, lifecycle
 	FROM sessions`
 
 func scanSession(rows *sql.Rows) (*session.Session, error) {
@@ -522,7 +559,7 @@ func scanSession(rows *sql.Rows) (*session.Session, error) {
 	if err := rows.Scan(
 		&sess.ID, &sess.Title, &sess.RepoPath, &branch, &sess.Harness, &ref,
 		&prompt, &status, &detail, &pid, &socket, &exitCode,
-		&createdAt, &updated, &endedAt,
+		&createdAt, &updated, &endedAt, &sess.Lifecycle,
 	); err != nil {
 		return nil, err
 	}

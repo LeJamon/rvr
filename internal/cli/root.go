@@ -115,8 +115,10 @@ func unknownRootCommandError(cmd *cobra.Command, arg string) error {
 
 // env bundles the resolved paths and configuration every command needs.
 type env struct {
-	paths config.Paths
-	cfg   *config.Config
+	paths   config.Paths
+	cfg     *config.Config
+	nowFn   func() time.Time
+	aliveFn func(string) bool
 }
 
 func loadEnv() (*env, error) {
@@ -178,5 +180,17 @@ func runDashboard(scope string) error {
 		ConfigPath: e.paths.ConfigFile,
 		Scope:      scope,
 		Version:    resolvedVersion(),
+		Reconcile:  func() error { return e.reconcileLatestConfig(st) },
 	})
+}
+
+func (e *env) reconcileLatestConfig(st *store.Store) error {
+	cfg, err := config.Load(e.paths.ConfigFile)
+	if err != nil {
+		return err
+	}
+	current := *e
+	current.cfg = cfg
+	_, err = current.reconcile(st)
+	return err
 }
