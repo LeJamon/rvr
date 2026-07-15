@@ -199,6 +199,12 @@ func TestResetModesDisablesHarnessInputModes(t *testing.T) {
 	}
 }
 
+func TestResetModesClearsKittyKeyboardStack(t *testing.T) {
+	if !bytes.Contains(resetModes, []byte("\x1b[<64u\x1b[=0;1u")) {
+		t.Fatalf("resetModes does not clear the Kitty keyboard stack deeply enough: %q", resetModes)
+	}
+}
+
 func TestFindDetach(t *testing.T) {
 	const exit = defaultExitKey // ctrl+q
 	cases := []struct {
