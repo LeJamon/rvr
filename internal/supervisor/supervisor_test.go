@@ -52,6 +52,32 @@ func waitAlive(t *testing.T, sock string) {
 	t.Fatalf("supervisor socket never came up: %s", sock)
 }
 
+func attachPrimer(t *testing.T, sock string) (net.Conn, []byte) {
+	t.Helper()
+	conn, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(1500 * time.Millisecond)); err != nil {
+		conn.Close()
+		t.Fatal(err)
+	}
+	var output []byte
+	for {
+		frame, err := wire.Read(conn)
+		if err != nil {
+			conn.Close()
+			t.Fatalf("read attach primer: %v", err)
+		}
+		if frame.Type == wire.TypeOutput {
+			output = append(output, frame.Payload...)
+		}
+		if frame.Type == wire.TypeState {
+			return conn, output
+		}
+	}
+}
+
 // TestSupervisorAttachAndKill exercises the full PTY→ring→socket path: launch a
 // `cat` harness, observe the initial prompt echoed back, then kill it via the
 // wire protocol and confirm the terminal state.
@@ -179,23 +205,14 @@ func TestAttachFullScreenReplaysSnapshot(t *testing.T) {
 	waitAlive(t, sock)
 	time.Sleep(500 * time.Millisecond) // let the harness draw and the supervisor observe alt-screen
 
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
+	first, _ := attachPrimer(t, sock)
+	if err := wire.WriteJSON(first, wire.TypeDetach, struct{}{}); err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	_ = first.Close()
 
-	var got []byte
-	conn.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
-	for range 20 {
-		f, err := wire.Read(conn)
-		if err != nil {
-			break
-		}
-		if f.Type == wire.TypeOutput {
-			got = append(got, f.Payload...)
-		}
-	}
+	conn, got := attachPrimer(t, sock)
+	defer conn.Close()
 
 	clearScreen := bytes.Index(got, []byte("\x1b[2J"))
 	if clearScreen < 0 {
@@ -219,10 +236,11 @@ func TestAttachFullScreenReplaysSnapshot(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 }
 
-// TestAttachConfiguredFullScreenReplaysSnapshotWithoutAltScreen covers
-// full-screen diff-rendered harnesses, such as codex, that should use a rendered
-// screen snapshot even when alternate-screen detection is unavailable.
-func TestAttachConfiguredFullScreenReplaysSnapshotWithoutAltScreen(t *testing.T) {
+// TestAttachConfiguredFullScreenPreservesHistoryWithoutAltScreen covers inline,
+// diff-rendered harnesses such as codex. Reattaching must replay their main-screen
+// output to rebuild native terminal scrollback, then paint an exact snapshot so
+// later differential frames still apply to the correct visible screen.
+func TestAttachConfiguredFullScreenPreservesHistoryWithoutAltScreen(t *testing.T) {
 	paths := testPaths(t)
 	st, err := store.Open(paths.DBFile)
 	if err != nil {
@@ -250,29 +268,25 @@ func TestAttachConfiguredFullScreenReplaysSnapshotWithoutAltScreen(t *testing.T)
 	waitAlive(t, sock)
 	time.Sleep(500 * time.Millisecond)
 
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
+	first, _ := attachPrimer(t, sock)
+	if err := wire.WriteJSON(first, wire.TypeDetach, struct{}{}); err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	_ = first.Close()
 
-	var got []byte
-	conn.SetReadDeadline(time.Now().Add(1500 * time.Millisecond))
-	for range 20 {
-		f, err := wire.Read(conn)
-		if err != nil {
-			break
-		}
-		if f.Type == wire.TypeOutput {
-			got = append(got, f.Payload...)
-		}
-	}
+	conn, got := attachPrimer(t, sock)
+	defer conn.Close()
 
 	if !bytes.Contains(got, []byte("CURRENT-FRAME")) {
 		t.Errorf("snapshot missing current screen content; got %.200q", got)
 	}
-	if bytes.Contains(got, []byte("RAW-HISTORY-ONLY")) {
-		t.Errorf("configured full-screen attach replayed raw history; got %.200q", got)
+	history := bytes.Index(got, []byte("RAW-HISTORY-ONLY"))
+	snapshot := bytes.LastIndex(got, []byte("\x1b[2J"))
+	if history < 0 {
+		t.Errorf("configured full-screen attach lost main-screen history; got %.200q", got)
+	}
+	if snapshot < 0 || history > snapshot {
+		t.Errorf("main-screen history was not replayed before the rendered snapshot; got %.200q", got)
 	}
 	if bytes.Contains(got, []byte(testAlternateScreenEnter)) {
 		t.Errorf("configured full-screen attach forced alternate-screen mode; got %.200q", got)

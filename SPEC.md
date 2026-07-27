@@ -121,11 +121,15 @@ Unix socket server ──► attach / input / resize / subscribe / kill / info
   (opencode's opentui) render *differentially* against their own internal frame
   buffer and never repaint cells they believe are already on screen — so an attaching
   client cannot rely on the app to redraw. Instead:
-  - **Full-screen harness (alt-screen tracked via `\x1b[?1049h`/`l`):** attach replays
-    an exact **snapshot** rendered from the emulator — reset+clear, every cell painted
+  - **Alternate-screen harness (tracked via `\x1b[?1049h`/`l`):** attach replays an
+    exact **snapshot** rendered from the emulator — reset+clear, every cell painted
     with its colors/attributes (truecolor preserved), cursor restored. The client's
-    display then matches the app's internal buffer, and subsequent diffs apply
-    cleanly. This is the tmux model.
+    display then matches the app's internal buffer, and subsequent diffs apply cleanly.
+  - **Configured full-screen harness on the main screen (notably codex):** the
+    supervisor retains the latest complete scrollback rebuild separately from the
+    bounded diff ring. Attach replays that history checkpoint, then paints the exact
+    current-screen snapshot. This preserves native scrollback without letting later
+    cursor-addressed animation evict the only usable transcript replay.
   - **Line-based harness:** attach replays the scrollback ring (history matters more).
   - The client's initial resize frame is applied **before** the snapshot is rendered,
     so the snapshot matches the client's dimensions (a wrong-width snapshot wraps
@@ -380,7 +384,7 @@ command = "pi"
 [harness.codex]
 adapter           = "generic"
 command           = "codex"
-full_screen       = true                  # attach uses a screen snapshot, not raw replay
+full_screen       = true                  # attach restores history, then snapshots the live screen
 prompt_positional = true                  # codex "<prompt>" starts a session with it
 resume_args       = ["resume", "--last"]  # reattach to the most recent session
 idle_timeout      = 120                   # no native state; mark non-actionable "idle"
@@ -393,8 +397,8 @@ args        = ["session"]                # start goose's interactive session
 resume_args = ["session", "--resume"]    # resume the most recent session
 # A CLI that accepts the prompt as a flag can add prompt_arg = "--flag"
 # (or prompt_positional = true) to deliver it on the command line instead.
-# Diff-rendered TUIs can add full_screen = true to attach from a screen snapshot
-# instead of raw scrollback replay.
+# Diff-rendered TUIs can add full_screen = true to finish attach with an exact
+# screen snapshot; inline scrollback checkpoints are restored first when present.
 
 ```
 

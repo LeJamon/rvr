@@ -32,9 +32,9 @@ type Harness struct {
 	ResumeArgs []string          `toml:"resume_args,omitempty"`
 	Env        map[string]string `toml:"env,omitempty"`
 
-	// FullScreen forces attach replay through the rendered screen snapshot even
-	// when the harness is not currently in the terminal alternate screen. Use it
-	// for diff-rendered TUIs whose raw scrollback cannot reconstruct the chat.
+	// FullScreen finishes attach with a rendered screen snapshot even when the
+	// harness is not currently in the terminal alternate screen. Inline history
+	// checkpoints are replayed first when available.
 	FullScreen bool `toml:"full_screen,omitempty"`
 
 	// Prompt delivery for the generic adapter. PromptArg passes the initial
