@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net"
@@ -10,6 +11,50 @@ import (
 	"github.com/LeJamon/rvr/internal/ringbuf"
 	"github.com/LeJamon/rvr/internal/wire"
 )
+
+func TestConfiguredFullScreenRetainsScrollbackCheckpoint(t *testing.T) {
+	h := newHub(ringbuf.New(64), newScreen(40, 6), wire.Info{SessionID: "codex"})
+	h.broadcastOutput([]byte(
+		"\x1b[3J\x1b[?2026h" +
+			"EARLIER-CHAT-LINE\r\n",
+	))
+	h.broadcastOutput([]byte("MORE-HISTORY\r\n\x1b[?2026l"))
+
+	// Simulate enough cursor-addressed animation/diff output to evict the
+	// transcript rebuild from the ordinary byte ring.
+	for range 20 {
+		h.broadcastOutput([]byte("\x1b[1;1H\x1b[2Kworking..."))
+	}
+	h.broadcastOutput([]byte("\x1b[3;1HCURRENT-FRAME"))
+	if bytes.Contains(h.ring.Snapshot(), []byte("EARLIER-CHAT-LINE")) {
+		t.Fatal("test setup did not evict the transcript checkpoint from the byte ring")
+	}
+
+	cl := newClient(nil)
+	h.register(cl, true)
+	var primer []byte
+	for {
+		frame := <-cl.out
+		if frame.Type == wire.TypeOutput {
+			primer = append(primer, frame.Payload...)
+		}
+		if frame.Type == wire.TypeState {
+			break
+		}
+	}
+
+	history := bytes.Index(primer, []byte("EARLIER-CHAT-LINE"))
+	snapshot := bytes.LastIndex(primer, []byte("\x1b[2J"))
+	if history < 0 {
+		t.Fatalf("attach primer lost the retained chat history: %.200q", primer)
+	}
+	if snapshot < 0 || history > snapshot {
+		t.Fatalf("chat history was not replayed before the current-screen snapshot: %.200q", primer)
+	}
+	if !bytes.Contains(primer[snapshot:], []byte("CURRENT-FRAME")) {
+		t.Fatalf("current-screen snapshot missing after history replay: %.200q", primer)
+	}
+}
 
 func TestBroadcastExitFlushesQueuedFramesInOrder(t *testing.T) {
 	server, peer := net.Pipe()

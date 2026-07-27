@@ -1,6 +1,7 @@
 package supervisor
 
 import (
+	"bytes"
 	"net"
 	"sync"
 	"time"
@@ -10,10 +11,13 @@ import (
 )
 
 const (
-	clientQueueDepth     = 256
-	outputChunkSize      = 32 * 1024
-	exitFlushTimeout     = 2 * time.Second
-	alternateScreenEnter = "\x1b[?1049h"
+	clientQueueDepth      = 256
+	outputChunkSize       = 32 * 1024
+	exitFlushTimeout      = 2 * time.Second
+	alternateScreenEnter  = "\x1b[?1049h"
+	eraseScrollback       = "\x1b[3J"
+	synchronizedOutputEnd = "\x1b[?2026l"
+	historyReplayLimit    = 4 * 1024 * 1024
 )
 
 // client is one attached connection. A dedicated writer goroutine drains out,
@@ -81,9 +85,73 @@ type hub struct {
 	screen          *screen
 	modes           map[int]bool // sticky DEC modes the harness enabled (mouse, ...)
 	alternateScreen bool
+	history         mainScreenHistory
 	info            wire.Info
 	state           wire.State
 	exit            *wire.Exit
+}
+
+// mainScreenHistory retains the latest complete scrollback rebuild emitted by
+// an inline TUI. Codex periodically clears scrollback, reflows its transcript,
+// and closes the repaint with synchronized-output mode. Keeping that checkpoint
+// separately prevents later high-volume differential frames from evicting the
+// only bytes capable of rebuilding history from the ordinary output ring.
+type mainScreenHistory struct {
+	capture []byte
+	replay  []byte
+}
+
+func (h *mainScreenHistory) observe(p []byte) {
+	for len(p) > 0 {
+		started := false
+		if h.capture == nil {
+			start := bytes.Index(p, []byte(eraseScrollback))
+			if start < 0 {
+				return
+			}
+			h.capture = make([]byte, 0, min(len(p)-start, historyReplayLimit))
+			p = p[start:]
+			started = true
+		}
+
+		searchFrom := 0
+		if started {
+			searchFrom = len(eraseScrollback)
+		}
+		nextReset := bytes.Index(p[searchFrom:], []byte(eraseScrollback))
+		if nextReset >= 0 {
+			nextReset += searchFrom
+		}
+		end := bytes.Index(p, []byte(synchronizedOutputEnd))
+		if nextReset >= 0 && (end < 0 || nextReset < end) {
+			h.capture = nil
+			p = p[nextReset:]
+			continue
+		}
+		if end < 0 {
+			if len(h.capture)+len(p) > historyReplayLimit {
+				h.capture = nil
+				return
+			}
+			h.capture = append(h.capture, p...)
+			return
+		}
+
+		end += len(synchronizedOutputEnd)
+		if len(h.capture)+end <= historyReplayLimit {
+			h.capture = append(h.capture, p[:end]...)
+			h.replay = bytes.Clone(h.capture)
+		}
+		h.capture = nil
+		p = p[end:]
+	}
+}
+
+func (h *mainScreenHistory) snapshot(fallback []byte) []byte {
+	if len(h.replay) == 0 {
+		return fallback
+	}
+	return bytes.Clone(h.replay)
 }
 
 func newHub(ring *ringbuf.Ring, scr *screen, info wire.Info) *hub {
@@ -105,6 +173,7 @@ func (h *hub) broadcastOutput(p []byte) {
 	h.alternateScreen = updateAltScreen(h.alternateScreen, p)
 	h.screen.write(p)
 	h.ring.Write(p)
+	h.history.observe(p)
 	observeModes(h.modes, p)
 	for _, chunk := range chunkBytes(p, outputChunkSize) {
 		h.fanout(wire.Frame{Type: wire.TypeOutput, Payload: chunk})
@@ -174,26 +243,23 @@ func (h *hub) broadcastExitWithin(e wire.Exit, timeout time.Duration) {
 // primer exactly matches the point where the live stream resumes.
 //
 // For a line-based harness the scrollback ring is replayed (history matters).
-// For a full-screen TUI (detected alt-screen or configured full_screen) the ring
-// holds interleaved cursor-addressed diff frames that garble when replayed, and
-// the app will not repaint unchanged cells, so the client receives an exact
-// snapshot of the emulator's screen. When the harness is actually using the
-// alternate screen, restore that mode before painting the rendered snapshot;
-// the snapshot intentionally contains rendered state rather than raw mode
-// transitions. Config-only snapshot replay stays on the main screen so inline
-// harnesses retain native terminal scrollback. Alternate-screen state is
-// tracked under the same lock as the emulator so the mode and snapshot cannot
-// describe different points in the output stream.
+// A TUI in the alternate screen has no native terminal scrollback, so attaching
+// restores that mode and paints only an exact snapshot of the current screen.
+// A configured full-screen TUI on the main screen (notably codex) needs both:
+// replay its output to rebuild native scrollback, then paint the exact snapshot
+// so subsequent differential frames apply to the right visible contents.
+// Alternate-screen state is tracked under the same lock as the emulator so the
+// mode and snapshot cannot describe different points in the output stream.
 func (h *hub) register(cl *client, configuredFullScreen bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	cl.enqueue(jsonFrame(wire.TypeHello, h.info))
 	primer := h.ring.Snapshot()
-	if h.alternateScreen || configuredFullScreen {
-		primer = h.screen.snapshot()
-		if h.alternateScreen {
-			primer = append([]byte(alternateScreenEnter), primer...)
-		}
+	if h.alternateScreen {
+		primer = append([]byte(alternateScreenEnter), h.screen.snapshot()...)
+	} else if configuredFullScreen {
+		primer = h.history.snapshot(primer)
+		primer = append(primer, h.screen.snapshot()...)
 	}
 	// Re-enable sticky modes (mouse, bracketed paste, focus) the harness set —
 	// the previous detach reset them on the client's terminal.
