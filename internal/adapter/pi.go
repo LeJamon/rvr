@@ -16,14 +16,16 @@ import (
 	"github.com/LeJamon/rvr/internal/session"
 )
 
-// piAdapter launches the pi coding agent's TUI and observes its state through
-// a tiny rvr hook extension (SPEC.md §5). The hook is materialized from the
-// embedded asset and loaded with `pi -e <hook>`; it connects back to a unix
-// socket and reports lifecycle events as JSON lines.
-type piAdapter struct {
-	sess   *session.Session
-	h      config.Harness
-	logger *slog.Logger
+// piCompatibleAdapter launches a pi-compatible coding agent TUI and observes
+// its state through a tiny rvr extension (SPEC.md §5). The extension is
+// materialized from the embedded asset and loaded with `-e <hook>`; it connects
+// back to a unix socket and reports lifecycle events as JSON lines.
+type piCompatibleAdapter struct {
+	sess      *session.Session
+	h         config.Harness
+	logger    *slog.Logger
+	name      string
+	resumeArg string
 
 	hookPath   string
 	socketPath string
@@ -41,32 +43,42 @@ type piAdapter struct {
 }
 
 func newPi(sess *session.Session, h config.Harness, deps Deps) (Adapter, error) {
-	hookPath := filepath.Join(deps.Paths.DataDir, "pi", "hook.mjs")
+	return newPiCompatibleAdapter(sess, h, deps, "pi", "--session")
+}
+
+func newOMP(sess *session.Session, h config.Harness, deps Deps) (Adapter, error) {
+	return newPiCompatibleAdapter(sess, h, deps, "omp", "--resume")
+}
+
+func newPiCompatibleAdapter(sess *session.Session, h config.Harness, deps Deps, name, resumeArg string) (Adapter, error) {
+	hookPath := filepath.Join(deps.Paths.DataDir, name, "hook.mjs")
 	if err := materializePiHook(hookPath); err != nil {
-		return nil, fmt.Errorf("install pi hook: %w", err)
+		return nil, fmt.Errorf("install %s hook: %w", name, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &piAdapter{
+	return &piCompatibleAdapter{
 		sess:       sess,
 		h:          h,
 		logger:     deps.Logger,
+		name:       name,
+		resumeArg:  resumeArg,
 		hookPath:   hookPath,
-		socketPath: filepath.Join(deps.Paths.SocketDir, sess.ID+"-pi.sock"),
+		socketPath: filepath.Join(deps.Paths.SocketDir, sess.ID+"-"+name+".sock"),
 		states:     make(chan StateEvent, 32),
 		ctx:        ctx,
 		cancel:     cancel,
 	}, nil
 }
 
-func (a *piAdapter) Launch(resume bool) (LaunchSpec, error) {
-	// The hook connects on startup, so the listener must exist before pi runs.
+func (a *piCompatibleAdapter) Launch(resume bool) (LaunchSpec, error) {
+	// The extension connects on startup, so the listener must exist first.
 	if err := os.MkdirAll(filepath.Dir(a.socketPath), 0o700); err != nil {
 		return LaunchSpec{}, err
 	}
 	_ = os.Remove(a.socketPath)
 	l, err := net.Listen("unix", a.socketPath)
 	if err != nil {
-		return LaunchSpec{}, fmt.Errorf("pi hook socket: %w", err)
+		return LaunchSpec{}, fmt.Errorf("%s hook socket: %w", a.name, err)
 	}
 	a.listener = l
 	a.wg.Add(1)
@@ -74,7 +86,7 @@ func (a *piAdapter) Launch(resume bool) (LaunchSpec, error) {
 
 	args := []string{"-e", a.hookPath}
 	if resume && a.sess.HarnessSessionRef != "" {
-		args = append(args, "--session", a.sess.HarnessSessionRef)
+		args = append(args, a.resumeArg, a.sess.HarnessSessionRef)
 	} else if a.sess.InitialPrompt != "" {
 		args = append(args, a.sess.InitialPrompt)
 	}
@@ -84,18 +96,21 @@ func (a *piAdapter) Launch(resume bool) (LaunchSpec, error) {
 	if env == nil {
 		env = os.Environ()
 	}
-	env = append(env, "PI_SKIP_VERSION_CHECK=1", "RVR_HOOK_SOCKET="+a.socketPath)
+	env = append(env, "RVR_HOOK_SOCKET="+a.socketPath)
+	if a.name == "pi" {
+		env = append(env, "PI_SKIP_VERSION_CHECK=1")
+	}
 
 	return LaunchSpec{Path: a.h.Command, Args: args, Env: env, Dir: a.sess.RepoPath}, nil
 }
 
-// AfterStart is a no-op: pi receives its prompt as an argv positional and the
-// hook socket is already accepting.
-func (a *piAdapter) AfterStart(io.Writer) error { return nil }
+// AfterStart is a no-op: pi-compatible harnesses receive the prompt as an argv
+// positional and the extension socket is already accepting.
+func (a *piCompatibleAdapter) AfterStart(io.Writer) error { return nil }
 
-func (a *piAdapter) States() <-chan StateEvent { return a.states }
+func (a *piCompatibleAdapter) States() <-chan StateEvent { return a.states }
 
-func (a *piAdapter) SessionRef() string {
+func (a *piCompatibleAdapter) SessionRef() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.ref
@@ -104,7 +119,7 @@ func (a *piAdapter) SessionRef() string {
 // Close is idempotent: the supervisor calls it both explicitly (to stop the
 // state channel before waiting) and via a deferred catch-all, so a second call
 // must not re-close a.states.
-func (a *piAdapter) Close() error {
+func (a *piCompatibleAdapter) Close() error {
 	a.closeOnce.Do(func() {
 		a.cancel()
 		if a.listener != nil {
@@ -117,7 +132,7 @@ func (a *piAdapter) Close() error {
 	return nil
 }
 
-func (a *piAdapter) accept() {
+func (a *piCompatibleAdapter) accept() {
 	defer a.wg.Done()
 	for {
 		conn, err := a.listener.Accept()
@@ -129,7 +144,7 @@ func (a *piAdapter) accept() {
 	}
 }
 
-func (a *piAdapter) readConn(conn net.Conn) {
+func (a *piCompatibleAdapter) readConn(conn net.Conn) {
 	defer a.wg.Done()
 	defer conn.Close()
 	sc := bufio.NewScanner(conn)

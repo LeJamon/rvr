@@ -21,6 +21,7 @@ import (
 const (
 	AdapterOpencode = "opencode"
 	AdapterPi       = "pi"
+	AdapterOMP      = "omp"
 	AdapterGeneric  = "generic"
 )
 
@@ -187,8 +188,8 @@ func DefaultPaths() (Paths, error) {
 	}, nil
 }
 
-// Default returns the built-in harness configuration. opencode and pi use
-// native adapters; codex uses the generic adapter with command-line prompt
+// Default returns the built-in harness configuration. opencode, pi, and omp
+// use native adapters; codex uses the generic adapter with command-line prompt
 // delivery because typing into its full-screen TUI races startup.
 func Default() *Config {
 	return &Config{
@@ -201,6 +202,7 @@ func Default() *Config {
 		Harnesses: map[string]Harness{
 			"opencode": {Adapter: AdapterOpencode, Command: "opencode"},
 			"pi":       {Adapter: AdapterPi, Command: "pi"},
+			"omp":      {Adapter: AdapterOMP, Command: "omp"},
 			"codex": {
 				Adapter:          AdapterGeneric,
 				Command:          "codex",
@@ -477,10 +479,10 @@ func (c *Config) validate() error {
 	}
 	for name, h := range c.Harnesses {
 		switch h.Adapter {
-		case AdapterOpencode, AdapterPi, AdapterGeneric:
+		case AdapterOpencode, AdapterPi, AdapterOMP, AdapterGeneric:
 		default:
-			return fmt.Errorf("harness %q: unknown adapter %q (want %q, %q, or %q)",
-				name, h.Adapter, AdapterOpencode, AdapterPi, AdapterGeneric)
+			return fmt.Errorf("harness %q: unknown adapter %q (want %q, %q, %q, or %q)",
+				name, h.Adapter, AdapterOpencode, AdapterPi, AdapterOMP, AdapterGeneric)
 		}
 		if h.IdleTimeout < 0 {
 			return fmt.Errorf("harness %q: idle_timeout must be >= 0, got %d", name, h.IdleTimeout)

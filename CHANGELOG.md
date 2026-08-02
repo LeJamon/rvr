@@ -8,3 +8,5 @@ versioning once the first release is tagged.
 - Production-readiness hardening for supervisor ownership, terminal exit
   delivery, migrations, state semantics, CLI lifecycle handling, packaging,
   and release verification.
+- Add built-in OMP harness support with pi-compatible lifecycle state detection
+  and exact session-file resume.
