@@ -8,7 +8,7 @@ It is a control plane over existing harnesses (tmux + htop for AI agents).
 
 - Language: **Go** (pure-Go dependencies preferred, single static binary)
 - Platforms: macOS and Linux (amd64/arm64 release artifacts)
-- v1 harnesses: **opencode**, **pi**, and **codex** (architecture stays
+- v1 harnesses: **opencode**, **pi**, **omp**, and **codex** (architecture stays
   harness-generic; codex uses the generic adapter)
 
 ---
@@ -17,7 +17,7 @@ It is a control plane over existing harnesses (tmux + htop for AI agents).
 
 | # | Decision | Resolution |
 |---|----------|------------|
-| D1 | State detection | Native side channels per harness (opencode SSE, pi extension); harnesses without a channel get running/exited only |
+| D1 | State detection | Native side channels per harness (opencode SSE, pi-compatible extension for pi/omp); harnesses without a channel get running/exited only |
 | D2 | Supervision model | One detached supervisor **process per session** |
 | D3 | Resume semantics | Reattach while the supervisor is alive. Interrupted sessions (reboot, supervisor crash) are **auto-resumed on the next rvr launch** via the harness's native resume flag and the captured session ref (§6). `rvr resume` covers manual cases. |
 | D4 | v1 extras | Desktop notifications, filtering, previews, and keybinding management included |
@@ -28,8 +28,8 @@ Rationale for D1/D2 in §5 and §4. Deferred features in §12.
 
 ## 2. Research findings that constrain the design
 
-Verified against docs and source on 2026-07-02. Both projects move fast — **pin the
-harness versions we test against** and degrade gracefully on mismatch.
+Verified against docs and source on 2026-08-02. These projects move fast — **pin
+the harness versions we test against** and degrade gracefully on mismatch.
 
 ### opencode (moved: `sst/opencode` → `anomalyco/opencode`; TUI rewritten in TS)
 - The TUI is client+server. Launching with `--port <n>` (default host 127.0.0.1)
@@ -62,13 +62,22 @@ harness versions we test against** and degrade gracefully on mismatch.
 - Useful env: `PI_SKIP_VERSION_CHECK=1`, `PI_CODING_AGENT_DIR`, settings
   `quietStartup`. Exit codes undocumented.
 
+### omp (Oh My Pi; binary `omp`)
+- Interactive TUI takes the initial prompt as a positional arg: `omp "fix tests"`.
+- OMP supports the pi extension API and `-e <file>`, including `session_start`,
+  `agent_start`, `agent_end`, and `ctx.sessionManager.getSessionFile()`. rvr uses
+  the same embedded lifecycle extension as pi.
+- Sessions are JSONL under `~/.omp/agent/sessions/`; resume the exact captured
+  file with `omp --resume <path>`.
+- Live-tested with OMP 17.2.4 on macOS on 2026-08-02.
+
 **Consequences:**
 1. The original spec's "Escape returns to dashboard" is impossible — Escape interrupts
    the agent in both TUIs. rvr uses **arrow-key navigation** for its own chrome and
    reserves passthrough-exit for a key the supported harnesses leave free,
    **`ctrl+q`** (§10).
 2. Terminal-output regex scraping would fight full-screen TUI escape sequences;
-   both harnesses offer better channels — hence D1.
+   native harness side channels provide better state — hence D1.
 3. `completed` vs `failed` cannot rest on exit codes; the state channel and
    who-initiated-termination feed the decision (§6).
 
@@ -81,7 +90,7 @@ Three process roles, one binary:
 ```
 rvr (CLI / dashboard TUI)          — foreground, short- or long-lived
   └── rvr _supervise <session-id>  — one detached process per session (hidden subcommand)
-        └── harness process           — opencode / pi inside a PTY
+        └── harness process           — opencode / pi / omp inside a PTY
 ```
 
 - `rvr new` inserts the session row, then spawns `rvr _supervise <id>` detached
@@ -168,9 +177,9 @@ Unix socket server ──► attach / input / resize / subscribe / kill / info
 
 ## 5. Adapter architecture
 
-The adapter contract is generic; opencode and pi get native implementations (D1).
-A `generic` adapter runs any CLI from config with running/exited states only, so new
-harnesses work day one and gain rich states only when someone writes an adapter.
+The adapter contract is generic; opencode, pi, and omp get native implementations
+(D1). A `generic` adapter runs any CLI from config with running/exited states only,
+so new harnesses work day one and gain rich states only when someone writes an adapter.
 
 ```go
 type Adapter interface {
@@ -209,19 +218,22 @@ type StateEvent struct {
 - Adapter contract tests cover the `permission.updated` event shape; live
   release validation should record the upstream version used.
 
-### pi adapter
-- Launch `pi -e <hook.mjs> "<prompt>"` with cwd = repo, `PI_SKIP_VERSION_CHECK=1`,
-  `RVR_HOOK_SOCKET=<sock>`.
-- `hook.mjs` is embedded in the rvr binary (`go:embed`) and materialized under the
-  data dir. It is an ESM **default-export factory** (`export default function(pi)`)
-  — pi loads extensions through jiti. It opens `RVR_HOOK_SOCKET` (`node:net`) and
-  reports `agent_start`/`agent_end`/`session_start`/`session_shutdown` as JSON lines.
-  The session file path (for resume) is read from
-  `ctx.sessionManager.getSessionFile()` inside the handlers, not from the payload.
+### pi and omp adapters
+- Launch `pi -e <hook.mjs> "<prompt>"` or `omp -e <hook.mjs> "<prompt>"` with
+  cwd = repo and `RVR_HOOK_SOCKET=<sock>`. pi additionally receives
+  `PI_SKIP_VERSION_CHECK=1`.
+- `hook.mjs` is embedded in the rvr binary (`go:embed`) and materialized under
+  the harness-specific data dir. It is an ESM **default-export factory** loaded
+  through the pi-compatible extension API. It opens `RVR_HOOK_SOCKET`
+  (`node:net`) and reports `agent_start`/`agent_end`/`session_start`/
+  `session_shutdown` as JSON lines. The session file path (for resume) is read
+  from `ctx.sessionManager.getSessionFile()` inside the handlers, not from the
+  payload.
 - The hook socket listener is created before launch (the hook connects at startup).
 - `WatchState`: `agent_start` → AgentBusy, `agent_end` → AgentIdle.
 - `SessionRef`: session JSONL path reported by the hook.
-- Resume: `pi -e <hook.mjs> --session <ref>`.
+- Resume the exact path with `pi --session <ref>` or `omp --resume <ref>`, while
+  continuing to load the lifecycle hook.
 
 ### generic adapter (config-only)
 Runs any PTY CLI from TOML — the day-one path for a new harness before anyone

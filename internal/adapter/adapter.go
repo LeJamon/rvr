@@ -91,6 +91,7 @@ type Factory func(sess *session.Session, h config.Harness, deps Deps) (Adapter, 
 var registry = map[string]Factory{
 	config.AdapterGeneric:  newGeneric,
 	config.AdapterPi:       newPi,
+	config.AdapterOMP:      newOMP,
 	config.AdapterOpencode: newOpencode,
 }
 

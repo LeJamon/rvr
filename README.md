@@ -1,7 +1,7 @@
 # rvr
 
 A terminal-first session manager for autonomous AI coding agents — `tmux + htop`
-for harnesses like **opencode**, **pi**, and **codex**. rvr launches agents,
+for harnesses like **opencode**, **pi**, **omp**, and **codex**. rvr launches agents,
 supervises them so they keep running after you close the UI, and gives you one
 dashboard to attach, monitor, and manage them regardless of which harness is
 doing the work.
@@ -40,6 +40,7 @@ rvr                                    # dashboard: all sessions
 rvr ~/code/api                         # dashboard scoped to one path
 rvr new --harness opencode fix the failing tests
 rvr new --harness pi --repo ~/code/api "add pagination"
+rvr new --harness omp --repo ~/code/api "review the auth flow"
 printf '%s\n' "long prompt" | rvr new -
 rvr list [--json]                      # aliases: ls, ps
 rvr attach <id>                        # reattach to a live session
@@ -93,18 +94,19 @@ or `rvr resume <id>` when you explicitly want to resume one.
 |---|---|---|---|
 | opencode | Native adapter, local SSE API | Busy, idle, permission/input, error | Exact captured session ID |
 | pi | Native adapter, embedded hook | Agent busy/idle lifecycle | Exact captured session file |
+| omp | Native adapter, embedded pi-compatible extension | Agent busy/idle lifecycle | Exact captured session file |
 | codex | Generic full-screen adapter | Output pattern plus non-actionable idle timeout | `codex resume --last` |
 | Other PTY CLIs | Configured generic adapter | Optional waiting pattern and idle timeout | Configured `resume_args` |
 
 If a native side channel is unavailable or its upstream API changes, the
 harness keeps running and rvr degrades to process-level running/exited state.
 CI tests adapter contracts and terminal behavior but does not install external
-harness binaries; release notes should record any live-tested harness versions.
+harness binaries. The OMP adapter was live-tested with OMP 17.2.4 on 2026-08-02.
 
 ## Configuration
 
-Optional, at `~/.config/rvr/config.toml`. opencode, pi, and codex work with no
-config.
+Optional, at `~/.config/rvr/config.toml`. opencode, pi, omp, and codex work with
+no config.
 
 ```toml
 default_harness   = "opencode"
@@ -119,6 +121,10 @@ command = "opencode"
 [harness.pi]
 adapter = "pi"
 command = "pi"
+
+[harness.omp]
+adapter = "omp"
+command = "omp"
 
 # codex is built in as a generic full-screen TUI harness. If you override it,
 # omitted fields keep these defaults.

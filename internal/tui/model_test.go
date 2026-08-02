@@ -861,8 +861,8 @@ func TestRenameEscCancels(t *testing.T) {
 func TestHarnessNamesDefaultFirst(t *testing.T) {
 	cfg := config.Default() // default_harness = opencode, rest alphabetical
 	names := harnessNames(cfg)
-	if !slices.Equal(names, []string{"opencode", "codex", "pi"}) {
-		t.Errorf("harnessNames = %v, want [opencode codex pi]", names)
+	if !slices.Equal(names, []string{"opencode", "codex", "omp", "pi"}) {
+		t.Errorf("harnessNames = %v, want [opencode codex omp pi]", names)
 	}
 }
 

@@ -251,3 +251,57 @@ func TestPiLaunch(t *testing.T) {
 		t.Errorf("hook not materialized: %v", err)
 	}
 }
+
+func TestOMPLaunch(t *testing.T) {
+	deps := testDeps(t)
+	sess := &session.Session{ID: "omp1", RepoPath: "/repo", InitialPrompt: "add pagination"}
+	h := config.Harness{Adapter: config.AdapterOMP, Command: "omp"}
+	a, err := New(sess, h, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	spec, err := a.Launch(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := argIndex(spec.Args, "-e"); i < 0 || filepath.Base(spec.Args[i+1]) != "hook.mjs" {
+		t.Errorf("expected -e <hook.mjs>, got %v", spec.Args)
+	}
+	if argIndex(spec.Args, "add pagination") < 0 {
+		t.Errorf("prompt not passed as argv: %v", spec.Args)
+	}
+	if !hasEnvKey(spec.Env, "RVR_HOOK_SOCKET") {
+		t.Errorf("omp env missing RVR_HOOK_SOCKET: %v", spec.Env)
+	}
+	if _, err := os.Stat(filepath.Join(deps.Paths.DataDir, "omp", "hook.mjs")); err != nil {
+		t.Errorf("hook not materialized: %v", err)
+	}
+}
+
+func TestOMPResumeUsesExactSession(t *testing.T) {
+	sess := &session.Session{
+		ID:                "omp2",
+		RepoPath:          "/repo",
+		InitialPrompt:     "do not send again",
+		HarnessSessionRef: "/sessions/session.jsonl",
+	}
+	h := config.Harness{Adapter: config.AdapterOMP, Command: "omp"}
+	a, err := New(sess, h, testDeps(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+
+	spec, err := a.Launch(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if i := argIndex(spec.Args, "--resume"); i < 0 || spec.Args[i+1] != sess.HarnessSessionRef {
+		t.Errorf("resume should pass --resume %q, got %v", sess.HarnessSessionRef, spec.Args)
+	}
+	if argIndex(spec.Args, sess.InitialPrompt) >= 0 {
+		t.Errorf("resume must not re-send the initial prompt: %v", spec.Args)
+	}
+}

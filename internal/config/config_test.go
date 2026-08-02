@@ -41,6 +41,9 @@ func TestLoadDefaultsWhenFileMissing(t *testing.T) {
 	if got := cfg.Harnesses["pi"].Adapter; got != config.AdapterPi {
 		t.Errorf("pi adapter = %q, want %q", got, config.AdapterPi)
 	}
+	if got := cfg.Harnesses["omp"]; got.Adapter != config.AdapterOMP || got.Command != "omp" {
+		t.Errorf("omp default = %+v, want native omp", got)
+	}
 	codex := cfg.Harnesses["codex"]
 	if codex.Adapter != config.AdapterGeneric || codex.Command != "codex" {
 		t.Errorf("codex default = %+v, want generic codex", codex)

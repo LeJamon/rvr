@@ -1,16 +1,16 @@
-// rvr pi hook extension.
+// rvr pi-compatible lifecycle extension.
 //
-// Loaded with `pi -e <this file>`. pi loads extensions through jiti as ES
-// modules with a default-exported factory that receives the ExtensionAPI. This
-// hook connects to the unix socket named by RVR_HOOK_SOCKET and reports pi
-// lifecycle events to the rvr supervisor as newline-delimited JSON:
+// Loaded with `pi -e <this file>` or `omp -e <this file>`. Both harnesses load
+// ESM extensions through a default-exported factory that receives the
+// ExtensionAPI. This extension connects to the unix socket named by
+// RVR_HOOK_SOCKET and reports lifecycle events as newline-delimited JSON:
 //   {"event": "agent_start", "ref": "<session file path>"}
 //
-// The session file path (used by rvr for `pi --session <ref>` resume) is not
-// in the event payloads; it is read from ctx.sessionManager.getSessionFile().
+// The session file path used for exact native resume is not in the event
+// payloads; it is read from ctx.sessionManager.getSessionFile().
 import * as net from "node:net";
 
-export default function (pi) {
+export default function (api) {
   const socketPath = process.env.RVR_HOOK_SOCKET;
   let sock = null;
   if (socketPath) {
@@ -35,8 +35,8 @@ export default function (pi) {
     }
   };
 
-  pi.on("session_start", (_event, ctx) => emit("session_start", { ref: refOf(ctx) }));
-  pi.on("agent_start", (_event, ctx) => emit("agent_start", { ref: refOf(ctx) }));
-  pi.on("agent_end", () => emit("agent_end"));
-  pi.on("session_shutdown", () => emit("session_shutdown"));
+  api.on("session_start", (_event, ctx) => emit("session_start", { ref: refOf(ctx) }));
+  api.on("agent_start", (_event, ctx) => emit("agent_start", { ref: refOf(ctx) }));
+  api.on("agent_end", () => emit("agent_end"));
+  api.on("session_shutdown", () => emit("session_shutdown"));
 }
