@@ -46,6 +46,7 @@ type Session struct {
 	InitialPrompt     string     `json:"initial_prompt,omitempty"`
 	Status            Status     `json:"status"`
 	StatusDetail      string     `json:"status_detail,omitempty"`
+	Hidden            bool       `json:"hidden,omitempty"`
 	PID               int        `json:"pid,omitempty"`
 	SocketPath        string     `json:"socket_path,omitempty"`
 	ExitCode          *int       `json:"exit_code,omitempty"`

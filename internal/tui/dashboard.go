@@ -91,6 +91,7 @@ type model struct {
 	filtering   bool
 	filter      string
 	filterInput textinput.Model
+	showHidden  bool // reveal the hidden sessions in the list
 
 	addingHarness bool   // the harness form (add or modify) is open
 	editHarness   string // "" = adding a new harness; else the name being modified
@@ -319,6 +320,39 @@ func scopeFilter(sessions []*session.Session, scope string) []*session.Session {
 	return out
 }
 
+// hideFilter drops hidden sessions from the display list. They stay in
+// allSessions so they can be revealed with show_hidden or `rvr show`.
+func hideFilter(sessions []*session.Session) []*session.Session {
+	out := sessions[:0:0]
+	for _, s := range sessions {
+		if !s.Hidden {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// hiddenCount reports how many sessions are stashed in the hidden pool.
+func (m model) hiddenCount() int {
+	n := 0
+	for _, s := range m.allSessions {
+		if s.Hidden {
+			n++
+		}
+	}
+	return n
+}
+
+// applyView rebuilds the display list: hide hidden sessions unless the reveal
+// is on, then applies the text filter.
+func (m model) applyView() []*session.Session {
+	list := m.allSessions
+	if !m.showHidden {
+		list = hideFilter(list)
+	}
+	return filterSessions(list, m.filter)
+}
+
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return tickMsg{} })
 }
@@ -370,7 +404,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			prevUpdated = prev.UpdatedAt
 		}
 		m.allSessions, m.err = msg.sessions, msg.err
-		m.sessions = filterSessions(m.allSessions, m.filter)
+		m.sessions = m.applyView()
 		var selCmd tea.Cmd
 		m, selCmd = m.reselect(prevID)
 		m = m.closeMovedPreview(prevID)
@@ -965,7 +999,7 @@ func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// still works when the filter currently hides every row (current() == nil).
 	if keyMatches(k.Cancel, msg) && m.filter != "" {
 		m.filter = ""
-		m.sessions = filterSessions(m.allSessions, "")
+		m.sessions = m.applyView()
 		return m, nil
 	}
 	s := m.current()
@@ -992,6 +1026,15 @@ func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.filterInput.Focus()
 	case keyMatches(k.Settings, msg):
 		return m.openSettings()
+	case keyMatches(k.Hide, msg):
+		return m.toggleHidden(s)
+	case keyMatches(k.ShowHidden, msg):
+		m.showHidden = !m.showHidden
+		m.sessions = m.applyView()
+		if m.cursor >= len(m.sessions) {
+			m.cursor = max(0, len(m.sessions)-1)
+		}
+		return m, nil
 	case keyMatches(k.QuitList, msg):
 		return m, tea.Quit
 	}
@@ -1012,6 +1055,23 @@ func (m model) removeNeedsConfirm(s *session.Session) bool {
 	return s.Status.Live() || m.alive(s.ID)
 }
 
+// toggleHidden flips the hidden flag on the selected session: hiding stashes it
+// into the hidden pool, and when the pool is shown restores it to the list. The
+// store write is followed by a reload so grouping and ordering refresh.
+func (m model) toggleHidden(s *session.Session) (tea.Model, tea.Cmd) {
+	hidden := !s.Hidden
+	s.Hidden = hidden
+	m.sessions = m.applyView()
+	if m.cursor >= len(m.sessions) {
+		m.cursor = max(0, len(m.sessions)-1)
+	}
+	verb := "hidden"
+	if !hidden {
+		verb = "restored"
+	}
+	return m, m.execSetHidden(s.ID, hidden, verb)
+}
+
 // updateFilterKey runs while the filter bar is open: typing refines the filter
 // live, Enter applies and closes, Esc clears and closes, arrows navigate the
 // filtered list.
@@ -1027,7 +1087,7 @@ func (m model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filter = ""
 		m.filterInput.Blur()
 		m.filterInput.SetValue("")
-		m.sessions = filterSessions(m.allSessions, "")
+		m.sessions = m.applyView()
 		return m, nil
 	case keyMatches(k.Up, msg):
 		return m.moveUp()
@@ -1037,7 +1097,7 @@ func (m model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.filterInput, cmd = m.filterInput.Update(msg)
 	m.filter = m.filterInput.Value()
-	m.sessions = filterSessions(m.allSessions, m.filter)
+	m.sessions = m.applyView()
 	if m.cursor >= len(m.sessions) {
 		m.cursor = max(0, len(m.sessions)-1)
 	}
@@ -1316,6 +1376,17 @@ func (m model) execRename(id, title string) tea.Cmd {
 			return actionDoneMsg{status: "rename failed: " + err.Error()}
 		}
 		return actionDoneMsg{status: "renamed to " + truncate(title, 40)}
+	}
+}
+
+// execSetHidden persists the hidden flag and reports the outcome. The dashboard
+// reloads on actionDoneMsg, so the list reflects the new visibility.
+func (m model) execSetHidden(id string, hidden bool, verb string) tea.Cmd {
+	return func() tea.Msg {
+		if err := m.deps.Store.SetHidden(id, hidden); err != nil {
+			return actionDoneMsg{status: "hide failed: " + err.Error()}
+		}
+		return actionDoneMsg{status: shortID(id) + " " + verb}
 	}
 }
 

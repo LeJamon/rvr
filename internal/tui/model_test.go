@@ -38,7 +38,7 @@ func newTestModel(sessions []*session.Session) model {
 		width:         120,
 		height:        40,
 		allSessions:   grp,
-		sessions:      grp,
+		sessions:      hideFilter(grp), // initial view excludes hidden sessions
 	}
 	m.composer.Focus()
 	return m
@@ -66,6 +66,8 @@ func key(s string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlK}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
+	case "ctrl+h":
+		return tea.KeyMsg{Type: tea.KeyCtrlH}
 	case "space": // bubbletea encodes the spacebar as KeySpace carrying the rune
 		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
 	default:
@@ -855,6 +857,73 @@ func TestRenameEscCancels(t *testing.T) {
 	m = next.(model)
 	if m.renaming {
 		t.Error("esc did not cancel rename")
+	}
+}
+
+func TestCtrlHHidesSelectedSession(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "x.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	sess := &session.Session{ID: "hideme01", Title: "keep for later", RepoPath: "/x", Harness: "opencode", Status: session.StatusCompleted}
+	if err := st.CreateSession(sess); err != nil {
+		t.Fatal(err)
+	}
+
+	m := selectSession(newTestModel([]*session.Session{sess}), 0)
+	m.deps.Store = st
+
+	next, cmd := m.Update(key("ctrl+h"))
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("ctrl+h on a selected session returned no command")
+	}
+	cmd()
+	if _, err := st.GetSession("hideme01"); err != nil {
+		t.Fatalf("GetSession after hide: %v", err)
+	}
+	got, _ := st.GetSession("hideme01")
+	if !got.Hidden {
+		t.Errorf("ctrl+h did not persist hidden flag")
+	}
+	for _, s := range m.sessions {
+		if s.ID == "hideme01" {
+			t.Errorf("hidden session still visible in the list")
+		}
+	}
+}
+
+func TestShowHiddenRevealsHiddenPool(t *testing.T) {
+	hidden := &session.Session{ID: "hidden01", Title: "stashed", RepoPath: "/x", Harness: "opencode", Status: session.StatusCompleted, Hidden: true}
+	visible := &session.Session{ID: "run00001", Title: "live", RepoPath: "/x", Harness: "opencode", Status: session.StatusRunning}
+
+	m := selectSession(newTestModel([]*session.Session{hidden, visible}), 0)
+	if m.showHidden {
+		t.Fatal("showHidden should start false")
+	}
+	for _, s := range m.sessions {
+		if s.ID == "hidden01" {
+			t.Fatal("hidden session visible by default")
+		}
+	}
+
+	next, _ := m.Update(key("h")) // show_hidden binding
+	m = next.(model)
+	if !m.showHidden {
+		t.Fatal("h did not enable reveal of hidden sessions")
+	}
+	found := false
+	for _, s := range m.sessions {
+		if s.ID == "hidden01" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("hidden session not revealed after h")
+	}
+	if foot := m.footer(); !strings.Contains(foot, "showing hidden(") {
+		t.Errorf("footer did not reflect reveal state: %q", foot)
 	}
 }
 

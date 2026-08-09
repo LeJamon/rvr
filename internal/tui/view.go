@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -764,9 +765,16 @@ func (m model) footer() string {
 			keyHint(k.Confirm), keyHint(k.LaunchAttach), keyHint(k.HarnessPicker),
 			keyHint(k.Up), keyHint(k.Quit))
 	default:
-		hint = fmt.Sprintf("%s select · %s open · ← back · %s logs · %s preview · %s rename · %s resume · %s remove · %s settings · %s filter · %s quit",
+		hint = fmt.Sprintf("%s select · %s open · ← back · %s logs · %s preview · %s rename · %s resume · %s hide · %s remove · %s settings · %s filter · %s quit",
 			updown, keyHint(k.Open), keyHint(k.Logs), keyHint(k.Preview), keyHint(k.Rename), keyHint(k.Resume),
-			keyHint(k.Remove), keyHint(k.Settings), keyHint(k.Filter), keyHint(k.Quit))
+			keyHint(k.Hide), keyHint(k.Remove), keyHint(k.Settings), keyHint(k.Filter), keyHint(k.Quit))
+		if n := m.hiddenCount(); n > 0 {
+			if m.showHidden {
+				hint += " · " + keyHint(k.ShowHidden) + " showing hidden(" + strconv.Itoa(n) + ")"
+			} else {
+				hint += " · " + keyHint(k.ShowHidden) + " hidden(" + strconv.Itoa(n) + ")"
+			}
+		}
 	}
 	out := footerStyle.Render(hint)
 	if m.status != "" {

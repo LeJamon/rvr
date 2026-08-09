@@ -63,6 +63,8 @@ CREATE TABLE repositories (
 );
 `, `
 ALTER TABLE sessions ADD COLUMN lifecycle INTEGER NOT NULL DEFAULT 1;
+`, `
+ALTER TABLE sessions ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
 `}
 
 // Event is one row of the append-only event log.
@@ -354,6 +356,16 @@ func (s *Store) SetSessionRef(id, ref string) error {
 	)
 }
 
+// SetHidden marks a session hidden (stashed out of the dashboard list) or
+// restored into the list. Hiding is a rvr-only view flag; it does not touch
+// the harness session or its lifecycle.
+func (s *Store) SetHidden(id string, hidden bool) error {
+	return s.exec1(id,
+		`UPDATE sessions SET hidden = ?, updated_at = ? WHERE id = ?`,
+		hidden, fmtTime(time.Now().UTC()), id,
+	)
+}
+
 // Finish records a terminal state, exit code, and end timestamp.
 func (s *Store) Finish(id string, status session.Status, exitCode int) error {
 	return s.FinishWithDetail(id, status, exitCode, "")
@@ -545,7 +557,7 @@ func (s *Store) TouchRepository(path, name string) error {
 const selectSessions = `
 	SELECT id, title, repo_path, branch, harness, harness_session_ref,
 	       initial_prompt, status, status_detail, pid, socket_path,
-	       exit_code, created_at, updated_at, ended_at, lifecycle
+	       exit_code, created_at, updated_at, ended_at, lifecycle, hidden
 	FROM sessions`
 
 func scanSession(rows *sql.Rows) (*session.Session, error) {
@@ -559,7 +571,7 @@ func scanSession(rows *sql.Rows) (*session.Session, error) {
 	if err := rows.Scan(
 		&sess.ID, &sess.Title, &sess.RepoPath, &branch, &sess.Harness, &ref,
 		&prompt, &status, &detail, &pid, &socket, &exitCode,
-		&createdAt, &updated, &endedAt, &sess.Lifecycle,
+		&createdAt, &updated, &endedAt, &sess.Lifecycle, &sess.Hidden,
 	); err != nil {
 		return nil, err
 	}
