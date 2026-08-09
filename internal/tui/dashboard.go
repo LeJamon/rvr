@@ -83,6 +83,7 @@ type model struct {
 	sessions    []*session.Session // filtered display list (grouped)
 	cursor      int                // selected session index (when !onComposer)
 	onComposer  bool               // the prompt box is the selected row
+	onHiddenBar bool               // the "Hidden" bar under the header is the selected row
 
 	renaming    bool
 	renameInput textinput.Model
@@ -343,6 +344,12 @@ func (m model) hiddenCount() int {
 	return n
 }
 
+// hasHiddenBar reports whether the dashboard shows the "Hidden" bar under the
+// header — i.e. there are stashed sessions to reveal.
+func (m model) hasHiddenBar() bool {
+	return m.hiddenCount() > 0
+}
+
 // applyView rebuilds the display list: hide hidden sessions unless the reveal
 // is on, then applies the text filter.
 func (m model) applyView() []*session.Session {
@@ -560,6 +567,13 @@ func (m model) scrollSessions(delta int) model {
 		m.composer.Blur()
 		return m
 	}
+	if m.onHiddenBar {
+		if delta < 0 {
+			m.onHiddenBar = false
+			m.cursor = 0
+		}
+		return m
+	}
 	m.cursor = min(max(m.cursor+delta, 0), len(m.sessions)-1)
 	return m
 }
@@ -611,6 +625,9 @@ func (m model) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.filtering {
 		return m.updateFilterKey(msg)
 	}
+	if m.onHiddenBar {
+		return m.updateHiddenBarKey(msg)
+	}
 	if m.onComposer {
 		switch {
 		case keyMatches(m.keys().ShowHidden, msg) && m.composer.Value() == "" && m.hiddenCount() > 0:
@@ -635,20 +652,37 @@ func textInputKey(msg tea.KeyMsg) bool {
 	return msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace
 }
 
-// moveUp/moveDown treat the prompt box as the row just below the last session
-// and wrap around, so the sessions plus the composer form a single circular
-// ring: top chat → … → last chat → composer → top chat.
+// moveUp/moveDown treat the prompt box as the row just below the last session,
+// with the "Hidden" bar (when any chats are stashed) sitting above the top chat.
+// Together they form a single circular ring:
+// hidden bar → top chat → … → last chat → composer → hidden bar.
 func (m model) moveUp() (tea.Model, tea.Cmd) {
-	if m.onComposer {
+	switch {
+	case m.onComposer:
 		if len(m.sessions) > 0 {
 			m.onComposer = false
 			m.cursor = len(m.sessions) - 1
 			m.composer.Blur()
+		} else if m.hasHiddenBar() {
+			m.onComposer = false
+			m.cursor = -1
+			m.onHiddenBar = true
+			m.composer.Blur()
 		}
-	} else if m.cursor > 0 {
+	case m.onHiddenBar:
+		// Wrap up from the hidden bar to the composer to close the circle.
+		m.onHiddenBar = false
+		m.onComposer = true
+		m.cursor = -1
+		return m, m.composer.Focus()
+	case len(m.sessions) > 0 && m.cursor > 0:
 		m.cursor--
-	} else if len(m.sessions) > 0 {
-		// At the top chat: wrap up to the composer to close the circle.
+	case len(m.sessions) > 0 && m.hasHiddenBar() && m.cursor == 0:
+		// At the top chat: step up onto the hidden bar.
+		m.onHiddenBar = true
+		m.cursor = -1
+	case len(m.sessions) > 0:
+		// At the top chat with no hidden bar: wrap up to the composer.
 		m.onComposer = true
 		return m, m.composer.Focus()
 	}
@@ -656,12 +690,31 @@ func (m model) moveUp() (tea.Model, tea.Cmd) {
 }
 
 func (m model) moveDown() (tea.Model, tea.Cmd) {
-	if m.onComposer {
-		// At the composer: wrap down to the top chat to close the circle.
+	switch {
+	case m.onComposer:
+		if m.hasHiddenBar() {
+			// Wrap down from the composer to the hidden bar to close the circle.
+			m.onComposer = false
+			m.cursor = -1
+			m.onHiddenBar = true
+			m.composer.Blur()
+			return m, nil
+		}
 		if len(m.sessions) > 0 {
 			m.onComposer = false
 			m.cursor = 0
 			m.composer.Blur()
+		}
+		return m, nil
+	case m.onHiddenBar:
+		if len(m.sessions) > 0 {
+			m.onHiddenBar = false
+			m.cursor = 0
+		} else {
+			m.onHiddenBar = false
+			m.onComposer = true
+			m.cursor = -1
+			return m, m.composer.Focus()
 		}
 		return m, nil
 	}
@@ -993,6 +1046,27 @@ func (m model) setDefaultHarness() (tea.Model, tea.Cmd) {
 	return m, m.composer.Focus()
 }
 
+// updateHiddenBarKey runs while the "Hidden" bar under the header is selected.
+// Enter (or the show_hidden binding) reveals/stashes the hidden pool, arrows
+// move into the list or back to the prompt box, and Cancel returns to typing.
+func (m model) updateHiddenBarKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	k := m.keys()
+	switch {
+	case keyMatches(k.Open, msg), keyMatches(k.Confirm, msg), keyMatches(k.ShowHidden, msg):
+		return m.toggleShowHidden()
+	case keyMatches(k.Up, msg) && !textInputKey(msg):
+		return m.moveUp()
+	case keyMatches(k.Down, msg) && !textInputKey(msg):
+		return m.moveDown()
+	case keyMatches(k.Cancel, msg):
+		m.onHiddenBar = false
+		m.onComposer = true
+		m.cursor = -1
+		return m, m.composer.Focus()
+	}
+	return m, nil
+}
+
 // updateSessionKey runs while a session is selected. Action bindings act on it
 // instead of typing into the composer.
 func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1059,12 +1133,17 @@ func (m model) toggleHidden(s *session.Session) (tea.Model, tea.Cmd) {
 	hidden := !s.Hidden
 	s.Hidden = hidden
 	m.sessions = m.applyView()
-	settled, _ := m.settleSelection()
+	// Hand focus back to the prompt box so the user can keep typing; the Hidden
+	// bar (when any chats remain stashed) is reachable above with ↑.
+	m.onHiddenBar = false
+	m.onComposer = true
+	m.cursor = -1
+	m.composer.Focus()
 	verb := "hidden"
 	if !hidden {
 		verb = "restored"
 	}
-	return settled, m.execSetHidden(s.ID, hidden, verb)
+	return m, m.execSetHidden(s.ID, hidden, verb)
 }
 
 // toggleShowHidden flips reveal of the hidden pool and repositions the
@@ -1077,16 +1156,22 @@ func (m model) toggleShowHidden() (tea.Model, tea.Cmd) {
 
 // settleSelection repositions the cursor after the visible list changed. When
 // every row disappears it returns focus to the composer so typing keeps working;
-// otherwise it clamps the cursor back into bounds. The composer is focused
-// synchronously (it ignores keyboard input while blurred), so callers can return
-// their own single command without batching.
+// otherwise it clamps the cursor back into bounds. The
+// composer is focused synchronously (it ignores keyboard input while blurred),
+// so callers can return their own single command without batching.
 func (m model) settleSelection() (tea.Model, tea.Cmd) {
 	if len(m.sessions) == 0 {
+		// Nothing visible — focus the prompt box. The Hidden bar, if any, sits
+		// just above and stays reachable with ↑.
 		if !m.onComposer {
+			m.onHiddenBar = false
 			m.onComposer = true
 			m.cursor = -1
 			m.composer.Focus()
 		}
+		return m, nil
+	}
+	if m.onHiddenBar || m.onComposer {
 		return m, nil
 	}
 	if m.cursor >= len(m.sessions) {
@@ -1463,6 +1548,9 @@ func (m model) clearStaleRemoveConfirm() model {
 // the filter.
 func (m model) reselect(prevID string) (model, tea.Cmd) {
 	if len(m.sessions) > 0 {
+		if m.onHiddenBar {
+			return m, nil // stay on the bar (e.g. after revealing; ↓ enters the list)
+		}
 		if i := indexOfID(m.sessions, prevID); i >= 0 {
 			m.cursor = i
 		} else if m.cursor > len(m.sessions)-1 {
@@ -1475,7 +1563,7 @@ func (m model) reselect(prevID string) (model, tea.Cmd) {
 	// all. While a filter is merely hiding every row (allSessions non-empty),
 	// stay in the list context so an empty filtered view never traps keystrokes
 	// and Esc still clears the filter.
-	if !m.onComposer && len(m.allSessions) == 0 {
+	if !m.onComposer && !m.onHiddenBar && len(m.allSessions) == 0 {
 		m.onComposer = true
 		return m, m.composer.Focus()
 	}

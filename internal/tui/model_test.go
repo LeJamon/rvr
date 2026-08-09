@@ -984,6 +984,83 @@ func TestRevealKeyStillTypesWhenNothingHidden(t *testing.T) {
 	}
 }
 
+// TestHiddenBarRendersWhenChatsStashed verifies the "Hidden" bar appears under
+// the header whenever chats are stashed, giving a visible entry point to them.
+func TestHiddenBarRendersWhenChatsStashed(t *testing.T) {
+	hidden := &session.Session{ID: "hidden01", Title: "stashed", RepoPath: "/x", Harness: "opencode", Status: session.StatusCompleted, Hidden: true}
+	visible := &session.Session{ID: "run00001", Title: "live", RepoPath: "/x", Harness: "opencode", Status: session.StatusRunning}
+	m := newTestModel([]*session.Session{hidden, visible})
+	out := stripANSI(m.View())
+	if !strings.Contains(out, "Hidden (1)") {
+		t.Errorf("hidden bar not rendered with a stashed chat:\n%s", out)
+	}
+}
+
+// TestEnterOnHiddenBarRevealsStashedChats covers the natural empty-list path:
+// with no visible chats the composer's up-key reaches the hidden bar, and Enter
+// reveals the stashed pool.
+func TestEnterOnHiddenBarRevealsStashedChats(t *testing.T) {
+	hidden := &session.Session{ID: "hidden01", Title: "stashed", RepoPath: "/x", Harness: "opencode", Status: session.StatusCompleted, Hidden: true}
+	m := newTestModel([]*session.Session{hidden})
+	m = send(m, "up") // empty visible list → composer reaches the hidden bar
+	if !m.onHiddenBar {
+		t.Fatal("up from the composer did not land on the hidden bar")
+	}
+	next, _ := m.Update(key("enter"))
+	m = next.(model)
+	if !m.showHidden {
+		t.Fatal("enter on the hidden bar did not reveal hidden chats")
+	}
+	found := false
+	for _, s := range m.sessions {
+		if s.ID == "hidden01" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("hidden chat not revealed after enter on the bar")
+	}
+}
+
+// TestHideReturnsFocusToComposer covers the reported regression: hiding a
+// session always hands focus back to the prompt box, even when chats remain.
+func TestHideReturnsFocusToComposer(t *testing.T) {
+	a := &session.Session{ID: "aaa00001", Title: "a", RepoPath: "/x", Harness: "opencode", Status: session.StatusCompleted}
+	b := &session.Session{ID: "bbb00001", Title: "b", RepoPath: "/x", Harness: "opencode", Status: session.StatusCompleted}
+	m := selectSession(newTestModel([]*session.Session{a, b}), 1) // hide b, a remains
+	next, _ := m.Update(key("ctrl+h"))
+	m = next.(model)
+	if !m.onComposer {
+		t.Fatal("hiding a session should return focus to the prompt box")
+	}
+	if len(m.sessions) != 1 {
+		t.Fatalf("expected one visible session to remain, got %d", len(m.sessions))
+	}
+}
+
+// TestHiddenBarNavigationRing verifies the bar participates in the navigation
+// ring: composer → last session → hidden bar → composer.
+func TestHiddenBarNavigationRing(t *testing.T) {
+	hidden := &session.Session{ID: "hidden01", Title: "stashed", RepoPath: "/x", Harness: "opencode", Status: session.StatusCompleted, Hidden: true}
+	visible := &session.Session{ID: "run00001", Title: "live", RepoPath: "/x", Harness: "opencode", Status: session.StatusRunning}
+	m := newTestModel([]*session.Session{hidden, visible})
+	if !m.onComposer {
+		t.Fatal("expected to start on the composer")
+	}
+	m = send(m, "up") // composer → the (single) visible session
+	if m.onComposer || m.onHiddenBar || m.cursor != 0 {
+		t.Fatalf("after up: onC=%v onB=%v cursor=%d, want session 0", m.onComposer, m.onHiddenBar, m.cursor)
+	}
+	m = send(m, "up") // session 0 → hidden bar
+	if !m.onHiddenBar {
+		t.Fatalf("after second up: expected the hidden bar, got onC=%v onB=%v", m.onComposer, m.onHiddenBar)
+	}
+	m = send(m, "up") // hidden bar → composer
+	if !m.onComposer {
+		t.Fatalf("after third up: expected the composer, got onC=%v onB=%v", m.onComposer, m.onHiddenBar)
+	}
+}
+
 func TestHarnessNamesDefaultFirst(t *testing.T) {
 	cfg := config.Default() // default_harness = opencode, rest alphabetical
 	names := harnessNames(cfg)
