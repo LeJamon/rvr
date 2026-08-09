@@ -66,6 +66,8 @@ func keyLabel(k string) string {
 		return "^o"
 	case "ctrl+x":
 		return "^x"
+	case "ctrl+h":
+		return "^h"
 	case "ctrl+r":
 		return "^r"
 	default:

@@ -128,15 +128,17 @@ type KeyMap struct {
 	Quit    Binding `toml:"quit"`    // two-step confirm-then-exit, from any mode
 
 	// Session list — active while a session row is selected.
-	Open     Binding `toml:"open"`      // open the live session window
-	Remove   Binding `toml:"remove"`    // remove the session; live sessions confirm first
-	Resume   Binding `toml:"resume"`    // resume the session
-	Rename   Binding `toml:"rename"`    // rename its rvr label
-	Logs     Binding `toml:"logs"`      // show the stored session log
-	Preview  Binding `toml:"preview"`   // toggle the screen peek
-	Filter   Binding `toml:"filter"`    // open the filter bar
-	Settings Binding `toml:"settings"`  // open the in-TUI keybindings editor
-	QuitList Binding `toml:"quit_list"` // quit straight from the list
+	Open       Binding `toml:"open"`        // open the live session window
+	Remove     Binding `toml:"remove"`      // remove the session; live sessions confirm first
+	Resume     Binding `toml:"resume"`      // resume the session
+	Rename     Binding `toml:"rename"`      // rename its rvr label
+	Logs       Binding `toml:"logs"`        // show the stored session log
+	Preview    Binding `toml:"preview"`     // toggle the screen peek
+	Filter     Binding `toml:"filter"`      // open the filter bar
+	Settings   Binding `toml:"settings"`    // open the in-TUI keybindings editor
+	QuitList   Binding `toml:"quit_list"`   // quit straight from the list
+	Hide       Binding `toml:"hide"`        // hide the selected session (stash it out of the list)
+	ShowHidden Binding `toml:"show_hidden"` // toggle revealing hidden sessions
 
 	// Prompt box (composer).
 	LaunchAttach  Binding `toml:"launch_attach"`  // launch a session and attach to it
@@ -240,15 +242,17 @@ func DefaultKeys() KeyMap {
 		Cancel:  Binding{"esc"},
 		Quit:    Binding{"ctrl+c"},
 
-		Open:     Binding{"enter", "right", "o"},
-		Remove:   Binding{"ctrl+x"},
-		Resume:   Binding{"r", "ctrl+r"},
-		Rename:   Binding{"e"},
-		Logs:     Binding{"l"},
-		Preview:  Binding{"space"},
-		Filter:   Binding{"/"},
-		Settings: Binding{"s"},
-		QuitList: Binding{"q"},
+		Open:       Binding{"enter", "right", "o"},
+		Remove:     Binding{"ctrl+x"},
+		Resume:     Binding{"r", "ctrl+r"},
+		Rename:     Binding{"e"},
+		Logs:       Binding{"l"},
+		Preview:    Binding{"space"},
+		Filter:     Binding{"/"},
+		Settings:   Binding{"s"},
+		QuitList:   Binding{"q"},
+		Hide:       Binding{"ctrl+h"},
+		ShowHidden: Binding{"h"},
 
 		LaunchAttach:  Binding{"ctrl+o", "alt+enter"},
 		HarnessPicker: Binding{"tab"},
@@ -282,6 +286,8 @@ func (k KeyMap) Actions() []KeyAction {
 		{"filter", "filter the session list", k.Filter},
 		{"settings", "open this keybindings editor", k.Settings},
 		{"quit_list", "quit straight from the session list", k.QuitList},
+		{"hide", "hide the selected session, or restore it when shown", k.Hide},
+		{"show_hidden", "toggle revealing the hidden sessions", k.ShowHidden},
 		{"launch_attach", "launch a new session and attach to it", k.LaunchAttach},
 		{"harness_picker", "open the harness picker", k.HarnessPicker},
 		{"add_harness", "open the add-harness form", k.AddHarness},
@@ -318,6 +324,8 @@ func mergeKeys(base, over KeyMap) KeyMap {
 		Filter:        pick(base.Filter, over.Filter),
 		Settings:      pick(base.Settings, over.Settings),
 		QuitList:      pick(base.QuitList, over.QuitList),
+		Hide:          pick(base.Hide, over.Hide),
+		ShowHidden:    pick(base.ShowHidden, over.ShowHidden),
 		LaunchAttach:  pick(base.LaunchAttach, over.LaunchAttach),
 		HarnessPicker: pick(base.HarnessPicker, over.HarnessPicker),
 		AddHarness:    pick(base.AddHarness, over.AddHarness),

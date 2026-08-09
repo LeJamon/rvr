@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -404,20 +405,31 @@ type listBlock struct {
 }
 
 func (m model) renderList(maxRows int) string {
+	bar := ""
+	if m.hasHiddenBar() {
+		bar = m.renderHiddenBar()
+		if maxRows > 0 {
+			maxRows--
+		}
+	}
 	if len(m.sessions) == 0 {
+		if bar != "" {
+			// No visible chats but hidden ones are stashed: the bar is the anchor.
+			return bar
+		}
 		return mutedStyle.Render("No sessions yet — type a prompt below and press enter.")
 	}
 	if maxRows <= 0 {
-		return listOverflowLine(len(m.sessions), "hidden")
+		return joinBar(bar, listOverflowLine(len(m.sessions), "hidden"))
 	}
 
 	blocks := m.listBlocks()
 	if blocksHeight(blocks) <= maxRows {
-		return joinBlocks(blocks)
+		return joinBar(bar, joinBlocks(blocks))
 	}
 
 	anchor := -1
-	if !m.onComposer {
+	if !m.onComposer && !m.onHiddenBar {
 		anchor = blockForSession(blocks, m.cursor)
 	}
 	start, end := chooseListWindow(blocks, anchor, maxRows)
@@ -432,7 +444,7 @@ func (m model) renderList(maxRows int) string {
 		contentRows--
 	}
 	if contentRows <= 0 {
-		return listOverflowLine(len(m.sessions), "hidden")
+		return joinBar(bar, listOverflowLine(len(m.sessions), "hidden"))
 	}
 
 	start, end = chooseListWindow(blocks, anchor, contentRows)
@@ -452,7 +464,30 @@ func (m model) renderList(maxRows int) string {
 	if len(lines) > maxRows {
 		lines = lines[:maxRows]
 	}
-	return strings.Join(lines, "\n")
+	return joinBar(bar, strings.Join(lines, "\n"))
+}
+
+// renderHiddenBar draws the selectable "Hidden" bar pinned under the header when
+// chats are stashed. Pressing Enter (or the show_hidden binding) toggles reveal.
+func (m model) renderHiddenBar() string {
+	title := groupStyle.Foreground(colMuted).Render("Hidden (" + strconv.Itoa(m.hiddenCount()) + ")")
+	hint := " — enter to show"
+	if m.showHidden {
+		hint = " — enter to hide"
+	}
+	content := title + mutedStyle.Render(hint)
+	if m.onHiddenBar {
+		return hRules(colAccent, m.width).Render(content)
+	}
+	return " " + content
+}
+
+// joinBar prefixes an optional pinned bar onto the session-list body.
+func joinBar(bar, body string) string {
+	if bar == "" {
+		return body
+	}
+	return bar + "\n" + body
 }
 
 func (m model) listBlocks() []listBlock {
@@ -763,10 +798,20 @@ func (m model) footer() string {
 		hint = fmt.Sprintf("%s launch · %s launch+attach · %s harness (+ add) · %s sessions · %s quit",
 			keyHint(k.Confirm), keyHint(k.LaunchAttach), keyHint(k.HarnessPicker),
 			keyHint(k.Up), keyHint(k.Quit))
+	case m.onHiddenBar:
+		hint = fmt.Sprintf("%s show hidden · ↑ prompt · ↓ list · %s quit",
+			keyHint(k.Confirm), keyHint(k.Quit))
 	default:
-		hint = fmt.Sprintf("%s select · %s open · ← back · %s logs · %s preview · %s rename · %s resume · %s remove · %s settings · %s filter · %s quit",
+		hint = fmt.Sprintf("%s select · %s open · ← back · %s logs · %s preview · %s rename · %s resume · %s hide · %s remove · %s settings · %s filter · %s quit",
 			updown, keyHint(k.Open), keyHint(k.Logs), keyHint(k.Preview), keyHint(k.Rename), keyHint(k.Resume),
-			keyHint(k.Remove), keyHint(k.Settings), keyHint(k.Filter), keyHint(k.Quit))
+			keyHint(k.Hide), keyHint(k.Remove), keyHint(k.Settings), keyHint(k.Filter), keyHint(k.Quit))
+		if n := m.hiddenCount(); n > 0 {
+			if m.showHidden {
+				hint += " · " + keyHint(k.ShowHidden) + " showing hidden(" + strconv.Itoa(n) + ")"
+			} else {
+				hint += " · " + keyHint(k.ShowHidden) + " hidden(" + strconv.Itoa(n) + ")"
+			}
+		}
 	}
 	out := footerStyle.Render(hint)
 	if m.status != "" {

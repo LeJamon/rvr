@@ -47,6 +47,9 @@ rvr resume <id>                        # reattach, or relaunch a dead one native
 rvr kill   <id>                        # terminate but keep the session record
 rvr rm     <id>... [--force]           # remove sessions; --force kills live ones first
 rvr prune                              # remove terminal sessions
+rvr hide   <id>...                    # stash sessions out of the dashboard list
+rvr show   <id>...                    # restore hidden sessions to the list
+rvr list --hidden                      # list only the hidden sessions
 rvr logs   <id> [-f]                   # print (or follow) a session's raw output
 rvr config                             # print resolved config + paths
 ```
@@ -71,7 +74,9 @@ with accent-colored top/bottom rules.
 - **A session selected:** `→`/`Enter` open a live window, or inspect stored logs
   for a finished session · `l` show stored logs · `space` toggle a live peek
   (falling back to stored logs for finished sessions) · `e` rename · `r` resume ·
-  `Ctrl+X` remove (`Ctrl+X` again for live sessions) · `/` filter · `↓`/`j` back
+  `Ctrl+H` hide the session (stash it out of the list; `Ctrl+H` again restores it
+  while the hidden pool is shown) · `h` toggle the hidden pool · `Ctrl+X` remove
+  (`Ctrl+X` again for live sessions) · `/` filter · `↓`/`j` back
   to the prompt box · `Ctrl+C` quit. (Rename is a
   rvr-only label; it never touches the harness's own session.) The peek shows
   the session's current screen in a pane above the prompt and closes when the

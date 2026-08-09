@@ -16,6 +16,7 @@ import (
 
 func newListCmd() *cobra.Command {
 	var asJSON bool
+	var onlyHidden bool
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls", "ps"},
@@ -35,6 +36,15 @@ func newListCmd() *cobra.Command {
 			sessions, err := st.ListSessions()
 			if err != nil {
 				return err
+			}
+			if onlyHidden {
+				var hidden []*session.Session
+				for _, s := range sessions {
+					if s.Hidden {
+						hidden = append(hidden, s)
+					}
+				}
+				sessions = hidden
 			}
 			out := cmd.OutOrStdout()
 			if asJSON {
@@ -61,6 +71,7 @@ func newListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "output sessions as JSON")
+	cmd.Flags().BoolVar(&onlyHidden, "hidden", false, "list only hidden sessions")
 	return cmd
 }
 

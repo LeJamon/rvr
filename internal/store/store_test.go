@@ -467,6 +467,46 @@ func TestListSessionsNewestFirst(t *testing.T) {
 	}
 }
 
+func TestSetHiddenRoundtrip(t *testing.T) {
+	st := openTemp(t)
+	sess := sample("00000000-0000-0000-0000-000000000007")
+	if err := st.CreateSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := st.GetSession("00000000"); err != nil {
+		t.Fatalf("GetSession: %v", err)
+	} else if got.Hidden {
+		t.Errorf("new session hidden = true, want false")
+	}
+	if err := st.SetHidden(sess.ID, true); err != nil {
+		t.Fatalf("SetHidden(true): %v", err)
+	}
+	got, err := st.GetSession(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession after hide: %v", err)
+	}
+	if !got.Hidden {
+		t.Errorf("hidden = false, want true")
+	}
+	if err := st.SetHidden(sess.ID, false); err != nil {
+		t.Fatalf("SetHidden(false): %v", err)
+	}
+	got, err = st.GetSession(sess.ID)
+	if err != nil {
+		t.Fatalf("GetSession after show: %v", err)
+	}
+	if got.Hidden {
+		t.Errorf("hidden = true, want false")
+	}
+}
+
+func TestSetHiddenUnknown(t *testing.T) {
+	st := openTemp(t)
+	if err := st.SetHidden("missing", true); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("SetHidden missing err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestReopenAppliesMigrationsOnce(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rvr.db")
