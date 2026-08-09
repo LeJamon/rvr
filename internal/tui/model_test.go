@@ -927,6 +927,63 @@ func TestShowHiddenRevealsHiddenPool(t *testing.T) {
 	}
 }
 
+// TestHideLastVisibleSessionFocusesComposer guards the reported regression:
+// hiding the last visible session must hand focus back to the composer (with a
+// sane cursor) instead of leaving a broken selection on a row that no longer
+// exists.
+func TestHideLastVisibleSessionFocusesComposer(t *testing.T) {
+	only := &session.Session{ID: "only0001", Title: "last one", RepoPath: "/x", Harness: "opencode", Status: session.StatusCompleted}
+	m := selectSession(newTestModel([]*session.Session{only}), 0)
+
+	next, _ := m.Update(key("ctrl+h")) // hide the only visible session
+	m = next.(model)
+	if len(m.sessions) != 0 {
+		t.Fatalf("expected the list to empty after hiding, got %d", len(m.sessions))
+	}
+	if !m.onComposer {
+		t.Fatal("hiding the last visible session must focus the composer")
+	}
+	if m.cursor >= 0 {
+		t.Errorf("cursor should be invalid in composer, got %d", m.cursor)
+	}
+}
+
+// TestRevealHiddenFromComposer guards the reported regression: pressing the
+// reveal key while the composer is selected must toggle the hidden pool visible
+// (previously the key was swallowed by the composer input handler).
+func TestRevealHiddenFromComposer(t *testing.T) {
+	hidden := &session.Session{ID: "hidden01", Title: "stashed", RepoPath: "/x", Harness: "opencode", Status: session.StatusCompleted, Hidden: true}
+	m := newTestModel([]*session.Session{hidden}) // starts on the composer
+
+	next, _ := m.Update(key("h")) // show_hidden binding
+	m = next.(model)
+	if !m.showHidden {
+		t.Fatal("reveal key from the composer did not enable showing hidden sessions")
+	}
+	found := false
+	for _, s := range m.sessions {
+		if s.ID == "hidden01" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("hidden session not revealed after h from the composer")
+	}
+}
+
+// TestRevealKeyStillTypesWhenNothingHidden keeps the composer usable: with no
+// hidden sessions the reveal key falls through to normal text entry.
+func TestRevealKeyStillTypesWhenNothingHidden(t *testing.T) {
+	m := newTestModel(sampleSessions())
+	m = send(m, "h")
+	if m.showHidden {
+		t.Fatal("h toggled reveal with nothing hidden")
+	}
+	if m.composer.Value() != "h" {
+		t.Errorf("expected h to be typed in the composer, got %q", m.composer.Value())
+	}
+}
+
 func TestHarnessNamesDefaultFirst(t *testing.T) {
 	cfg := config.Default() // default_harness = opencode, rest alphabetical
 	names := harnessNames(cfg)

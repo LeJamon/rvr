@@ -613,6 +613,8 @@ func (m model) dispatchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.onComposer {
 		switch {
+		case keyMatches(m.keys().ShowHidden, msg) && m.composer.Value() == "" && m.hiddenCount() > 0:
+			return m.toggleShowHidden()
 		case keyMatches(m.keys().Up, msg) && !textInputKey(msg) && m.composer.Value() == "":
 			return m.moveUp()
 		case keyMatches(m.keys().Down, msg) && !textInputKey(msg) && m.composer.Value() == "":
@@ -1029,12 +1031,7 @@ func (m model) updateSessionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case keyMatches(k.Hide, msg):
 		return m.toggleHidden(s)
 	case keyMatches(k.ShowHidden, msg):
-		m.showHidden = !m.showHidden
-		m.sessions = m.applyView()
-		if m.cursor >= len(m.sessions) {
-			m.cursor = max(0, len(m.sessions)-1)
-		}
-		return m, nil
+		return m.toggleShowHidden()
 	case keyMatches(k.QuitList, msg):
 		return m, tea.Quit
 	}
@@ -1062,14 +1059,40 @@ func (m model) toggleHidden(s *session.Session) (tea.Model, tea.Cmd) {
 	hidden := !s.Hidden
 	s.Hidden = hidden
 	m.sessions = m.applyView()
-	if m.cursor >= len(m.sessions) {
-		m.cursor = max(0, len(m.sessions)-1)
-	}
+	settled, _ := m.settleSelection()
 	verb := "hidden"
 	if !hidden {
 		verb = "restored"
 	}
-	return m, m.execSetHidden(s.ID, hidden, verb)
+	return settled, m.execSetHidden(s.ID, hidden, verb)
+}
+
+// toggleShowHidden flips reveal of the hidden pool and repositions the
+// selection, returning focus to the composer if the visible list empties.
+func (m model) toggleShowHidden() (tea.Model, tea.Cmd) {
+	m.showHidden = !m.showHidden
+	m.sessions = m.applyView()
+	return m.settleSelection()
+}
+
+// settleSelection repositions the cursor after the visible list changed. When
+// every row disappears it returns focus to the composer so typing keeps working;
+// otherwise it clamps the cursor back into bounds. The composer is focused
+// synchronously (it ignores keyboard input while blurred), so callers can return
+// their own single command without batching.
+func (m model) settleSelection() (tea.Model, tea.Cmd) {
+	if len(m.sessions) == 0 {
+		if !m.onComposer {
+			m.onComposer = true
+			m.cursor = -1
+			m.composer.Focus()
+		}
+		return m, nil
+	}
+	if m.cursor >= len(m.sessions) {
+		m.cursor = len(m.sessions) - 1
+	}
+	return m, nil
 }
 
 // updateFilterKey runs while the filter bar is open: typing refines the filter

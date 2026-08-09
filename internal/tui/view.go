@@ -458,8 +458,22 @@ func (m model) renderList(maxRows int) string {
 
 func (m model) listBlocks() []listBlock {
 	var blocks []listBlock
-	lastRank := -1
+	// Partition into visible (status-grouped) and hidden rows so revealed hidden
+	// sessions render under their own "Hidden" section instead of their status
+	// group. sessionIndex still refers to the position in m.sessions, keeping
+	// selection and windowing correct.
+	visible, hidden := make([]int, 0, len(m.sessions)), make([]int, 0, len(m.sessions))
 	for i, s := range m.sessions {
+		if s.Hidden {
+			hidden = append(hidden, i)
+		} else {
+			visible = append(visible, i)
+		}
+	}
+
+	lastRank := -1
+	for _, i := range visible {
+		s := m.sessions[i]
 		if r := groupRank(s.Status); r != lastRank {
 			if lastRank != -1 {
 				blocks = append(blocks, listBlock{lines: []string{""}, sessionIndex: -1})
@@ -474,6 +488,22 @@ func (m model) listBlocks() []listBlock {
 			sessionIndex: i,
 		})
 	}
+
+	if len(hidden) > 0 {
+		if len(blocks) > 0 {
+			blocks = append(blocks, listBlock{lines: []string{""}, sessionIndex: -1})
+		}
+		hdr := groupStyle.Foreground(colMuted).Render("▍ Hidden")
+		blocks = append(blocks, listBlock{lines: []string{hdr}, sessionIndex: -1})
+		for _, i := range hidden {
+			s := m.sessions[i]
+			blocks = append(blocks, listBlock{
+				lines:        strings.Split(m.renderRow(s, !m.onComposer && i == m.cursor), "\n"),
+				sessionIndex: i,
+			})
+		}
+	}
+
 	return blocks
 }
 
